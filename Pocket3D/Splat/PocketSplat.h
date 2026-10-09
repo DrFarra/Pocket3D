@@ -20,6 +20,8 @@ int pocket_splat_count(PocketSplatTrainer trainer);
 float pocket_splat_psnr(PocketSplatTrainer trainer);
 bool pocket_splat_export(PocketSplatTrainer trainer, const char *plyPath, char *error, int errorLength);
 void pocket_splat_destroy(PocketSplatTrainer trainer);
+/// Espera a que la GPU termine lo encolado (antes de pasar a segundo plano, donde iOS no deja usarla).
+void pocket_splat_sync(void);
 
 #ifdef __cplusplus
 }

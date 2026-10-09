@@ -15,7 +15,7 @@ struct ColorView {
 
 enum MeshColor {
     /// Color de la vista más reciente que ve el punto sin nada delante (según la profundidad LiDAR).
-    static func color(of point: SIMD3<Float>, in views: [ColorView], tolerance: Float = 0.05) -> SIMD3<UInt8>? {
+    static func color(of point: SIMD3<Float>, in views: [ColorView]) -> SIMD3<UInt8>? {
         for view in views.reversed() {
             // Convención ARKit/OpenGL: la cámara mira a -Z, Y hacia arriba; la imagen tiene Y hacia abajo.
             let c = view.worldToCamera * SIMD4(point, 1)
@@ -28,7 +28,8 @@ enum MeshColor {
             let du = Int(u * Float(view.depthWidth) / Float(view.width))
             let dv = Int(v * Float(view.depthHeight) / Float(view.height))
             let measured = Float(view.depthMM[dv * view.depthWidth + du]) / 1000
-            guard measured > 0, abs(measured - z) < tolerance else { continue }
+            // El error del LiDAR y del suavizado de la malla crece con la distancia: ~3 % a 4 m.
+            guard measured > 0, abs(measured - z) < max(0.05, 0.03 * z) else { continue }
 
             let i = (Int(v) * view.width + Int(u)) * 4
             return SIMD3(view.rgba[i], view.rgba[i + 1], view.rgba[i + 2])
@@ -36,19 +37,45 @@ enum MeshColor {
         return nil
     }
 
-    /// Colorea todos los vértices repartiendo el trabajo entre los núcleos; gris si ninguna foto los ve.
-    static func colors(of positions: [SIMD3<Float>], in views: [ColorView]) -> [SIMD3<UInt8>] {
-        var colors = [SIMD3<UInt8>](repeating: SIMD3(160, 160, 160), count: positions.count)
+    static let unseen = SIMD3<UInt8>(160, 160, 160)
+
+    /// Colorea todos los vértices repartiendo el trabajo entre los núcleos. Con `indices` (triángulos), los que
+    /// ninguna foto vio limpio toman el color de sus vecinos; si no queda ninguno cerca, gris.
+    static func colors(of positions: [SIMD3<Float>], in views: [ColorView], indices: [UInt32] = []) -> [SIMD3<UInt8>] {
+        var colors = [SIMD3<UInt8>?](repeating: nil, count: positions.count)
         let chunk = 4096
         colors.withUnsafeMutableBufferPointer { buffer in
             let out = buffer  // copia del puntero: cada hilo escribe índices distintos
             DispatchQueue.concurrentPerform(iterations: (positions.count + chunk - 1) / chunk) { c in
                 for i in c * chunk..<min(positions.count, (c + 1) * chunk) {
-                    if let color = color(of: positions[i], in: views) { out[i] = color }
+                    out[i] = color(of: positions[i], in: views)
                 }
             }
         }
-        return colors
+        fillGaps(&colors, indices: indices)
+        return colors.map { $0 ?? unseen }
+    }
+
+    /// Bordes y ruido de profundidad dejan vértices sueltos sin color: sin esto la malla sale moteada de gris
+    /// (~25 % en una habitación real). Cada pasada los tiñe con el promedio de sus vecinos ya coloreados.
+    static func fillGaps(_ colors: inout [SIMD3<UInt8>?], indices: [UInt32], passes: Int = 12) {
+        for _ in 0..<passes {
+            var sum = [SIMD3<UInt32>](repeating: .zero, count: colors.count)
+            var count = [UInt32](repeating: 0, count: colors.count)
+            func spread(_ from: Int, _ to: Int) {
+                if colors[to] == nil, let c = colors[from] { sum[to] &+= SIMD3(truncatingIfNeeded: c); count[to] += 1 }
+            }
+            for t in stride(from: 0, to: indices.count - indices.count % 3, by: 3) {
+                let a = Int(indices[t]), b = Int(indices[t + 1]), c = Int(indices[t + 2])
+                spread(a, b); spread(b, a); spread(a, c); spread(c, a); spread(b, c); spread(c, b)
+            }
+            var changed = false
+            for i in colors.indices where colors[i] == nil && count[i] > 0 {
+                colors[i] = SIMD3(truncatingIfNeeded: sum[i] / count[i])
+                changed = true
+            }
+            if !changed { return }
+        }
     }
 
     /// PLY binario con color por vértice: lo abren Blender, MeshLab, CloudCompare, nerfstudio y el visor de la app.

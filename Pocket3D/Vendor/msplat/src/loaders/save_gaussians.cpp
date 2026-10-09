@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <stdexcept>
 
 static const double C0 = 0.28209479177387814;
 
@@ -51,6 +52,9 @@ void saveGaussianPly(const std::string &path, GaussianParams &p, int step) {
 
         o.write(reinterpret_cast<const char*>(row.data()), floatsPerRow * sizeof(float));
     }
+    o.close();
+    // Pocket3D: un disco lleno dejaba un .ply truncado que se daba por bueno.
+    if (!o) throw std::runtime_error("No se pudo escribir el splat (¿falta espacio?).");
 }
 
 void saveGaussianSplat(const std::string &path, GaussianParams &p) {

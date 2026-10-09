@@ -135,12 +135,12 @@ struct ObjectScanView: View {
     }
 }
 
-/// Flujo guiado: detecta el objeto sola, fija la caja en cuanto lo ve estable, avisa de cada problema
-/// (luz, distancia, velocidad) y no deja terminar con pocas fotos.
+/// Flujo guiado: busca el objeto solo, el usuario fija la caja cuando lo rodea bien, avisa de cada problema
+/// (luz, distancia, velocidad) y no deja terminar con pocas fotos. Textos arriba y botones en una barra
+/// abajo: nada tapa el anillo de captura del centro.
 private struct CaptureControls: View {
     let session: ObjectCaptureSession // @Observable: SwiftUI la observa sola
     @Environment(\.scanPaused) private var paused
-    @State private var lockCountdown: Int?
     @State private var reviewing = false
     /// Se queda en true tras la primera vuelta completa (beginNewScanPass reinicia userCompletedScanPass).
     @State private var passDone = false
@@ -153,88 +153,79 @@ private struct CaptureControls: View {
                 // Nube de puntos de lo capturado hasta ahora: así ves qué zonas faltan.
                 ObjectCapturePointCloudView(session: session).ignoresSafeArea().background(Color.black)
             }
-            VStack(spacing: 12) {
-                Spacer()
+            VStack(spacing: 8) {
+                // Debajo de los botones de cerrar y ayuda.
+                Text(hint)
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.white).multilineTextAlignment(.center)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
                 if let warning, !reviewing {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
                         .font(.headline).foregroundStyle(.black)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
                         .background(.yellow, in: Capsule())
-                        .transition(.scale.combined(with: .opacity))
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                Text(hint)
-                    .font(.callout).foregroundStyle(.white).multilineTextAlignment(.center)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(.black.opacity(0.55), in: Capsule())
-                    .padding(.horizontal)
+                Spacer()
                 buttons
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-                    .padding(.bottom, 40)
+                    .lineLimit(1)
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .environment(\.colorScheme, .dark)
+                    .padding(.bottom, 24)
             }
+            .padding(.top, 64).padding(.horizontal)
             .animation(.spring, value: warning)
         }
         .sensoryFeedback(.warning, trigger: warning) { _, new in new != nil }
         .sensoryFeedback(.success, trigger: session.userCompletedScanPass) { _, done in done }
-        .task(id: "\(stateKey)-\(paused)") { if !paused { await automate() } }
+        .task(id: "\(stateKey)-\(paused)") { if !paused { await startDetecting() } }
         .onChange(of: session.userCompletedScanPass) { _, done in if done { passDone = true } }
     }
 
     @ViewBuilder private var buttons: some View {
-        HStack {
+        HStack(spacing: 10) {
             switch session.state {
             case .ready:
-                Button("Buscar objeto") { _ = session.startDetecting() }
+                ProgressView().tint(.white).padding(.horizontal, 24)
             case .detecting:
-                Button("Otro objeto", systemImage: "arrow.counterclockwise") { _ = session.resetDetection() }
-                    .buttonStyle(.bordered)
-                Button("Fijar caja") { session.startCapturing() }
+                Button("Otro", systemImage: "arrow.counterclockwise") { _ = session.resetDetection() }
+                    .buttonStyle(.bordered).tint(.white)
+                Button("Fijar caja", systemImage: "cube") { session.startCapturing() }
+                    .buttonStyle(.borderedProminent)
             case .capturing:
                 if reviewing {
-                    Button("Seguir escaneando") { session.resume(); reviewing = false }
+                    Button("Seguir escaneando", systemImage: "camera") { session.resume(); reviewing = false }
+                        .buttonStyle(.borderedProminent)
                 } else {
                     if session.userCompletedScanPass {
-                        Button("Ver cómo va", systemImage: "eye") { session.pause(); reviewing = true }
-                            .buttonStyle(.bordered)
-                        Button("Otra vuelta") { session.beginNewScanPass() }.buttonStyle(.bordered)
+                        Button("Ver", systemImage: "eye") { session.pause(); reviewing = true }
+                            .buttonStyle(.bordered).tint(.white)
+                        Button("Otra vuelta", systemImage: "arrow.triangle.2.circlepath") { session.beginNewScanPass() }
+                            .buttonStyle(.bordered).tint(.white)
                     }
                     let missing = Self.minimumShots - session.numberOfShotsTaken
                     Button(missing > 0 ? "Faltan \(missing) fotos" : passDone ? "Terminar (\(session.numberOfShotsTaken))" : "Completa la vuelta") {
                         session.finish()
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(missing > 0 || !passDone)
                 }
             default:
-                ProgressView().tint(.white)
+                ProgressView().tint(.white).padding(.horizontal, 24)
             }
         }
+        .controlSize(.large)
     }
 
     private var stateKey: String { "\(session.state)" }
 
-    /// Sin toques: en «listo» empieza a buscar el objeto y en «detectando» fija la caja tras ~2 s viéndolo estable,
-    /// así la caja deja de moverse con la cámara.
-    private func automate() async {
-        lockCountdown = nil
-        switch session.state {
-        case .ready:
-            while !Task.isCancelled, case .ready = session.state {
-                if session.startDetecting() { return }
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        case .detecting:
-            var stableTicks = 0
-            while !Task.isCancelled, case .detecting = session.state {
-                // Estable = ningún aviso salvo la luz (que no cambia el encuadre).
-                stableTicks = session.feedback.subtracting([.environmentLowLight]).isEmpty ? stableTicks + 1 : 0
-                lockCountdown = stableTicks > 0 ? 3 - stableTicks * 3 / 8 : nil
-                if stableTicks >= 8 {   // 8 × 0,25 s
-                    session.startCapturing()
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-        default:
-            break
+    /// En «listo» empieza a buscar sola. La caja la fija el usuario: fijarla sola agarraba lo que estuviera
+    /// en el centro (otra cosa de la mesa) en vez del objeto.
+    private func startDetecting() async {
+        while !Task.isCancelled, case .ready = session.state {
+            if session.startDetecting() { return }
+            try? await Task.sleep(for: .milliseconds(500))
         }
     }
 
@@ -247,18 +238,17 @@ private struct CaptureControls: View {
         if feedback.contains(.objectTooClose) { return "Aléjate un poco" }
         if feedback.contains(.objectTooFar) { return "Acércate un poco" }
         if feedback.contains(.outOfFieldOfView) { return "Apunta al objeto" }
-        if case .detecting = session.state, feedback.contains(.objectNotDetected) { return "No veo el objeto: céntralo en pantalla" }
         return nil
     }
 
     private var hint: String {
         switch session.state {
         case .ready: "Apunta al objeto. Mejor sobre una mesa lisa y despejada"
-        case .detecting:
-            if let lockCountdown { "Fijando la caja en \(lockCountdown)… no muevas el iPhone" } else { "Centra el objeto en la pantalla" }
-        case .capturing where reviewing: "Puntos = zonas ya capturadas. Los huecos son lo que falta"
-        case .capturing where session.userCompletedScanPass: "¡Vuelta completa! Mira cómo va, da otra más alta o más baja, o termina"
-        case .capturing: "Camina despacio alrededor hasta completar el anillo"
+        case .detecting: "Pon el punto blanco sobre el objeto y espera a que la caja lo rodee entero. Luego toca «Fijar caja»"
+        case .capturing where reviewing:
+            "Esto es lo que lleva capturado. Gira con un dedo para mirarlo: donde no hay puntos, falta escanear"
+        case .capturing where session.userCompletedScanPass: "¡Vuelta completa! Da otra más alta o más baja, o termina"
+        case .capturing: "Camina despacio alrededor hasta llenar el anillo"
         default: "Preparando…"
         }
     }
