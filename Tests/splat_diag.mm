@@ -1,5 +1,6 @@
 // Diagnóstico temporal: PSNR con varias configuraciones y render de la vista de prueba 0 (PPM).
 #include "msplat_c_api.h"
+#import <Metal/Metal.h>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -30,6 +31,25 @@ static void run(const char *name, const char *dataset, MsplatConfig c) {
 
 int main(int argc, char **argv) {
     msplat_set_metallib_path(argv[2]);
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    printf("GPU: %s · Apple7 %d · Apple9 %d · Metal3 %d\n", device.name.UTF8String,
+           [device supportsFamily:MTLGPUFamilyApple7], [device supportsFamily:MTLGPUFamilyApple9],
+           [device supportsFamily:MTLGPUFamilyMetal3]);
+    {
+        // Sin entrenar: la nube inicial (puntos del cubo) ya debe verse en su sitio si la geometría cuadra.
+        MsplatConfig c = msplat_default_config();
+        c.bgColor[0] = c.bgColor[1] = c.bgColor[2] = 0;
+        c.numDownscales = 0;
+        MsplatDataset ds = msplat_dataset_create(argv[1], 1.0f, true, 8);
+        MsplatTrainer t = msplat_trainer_create(ds, c);
+        savePPM(msplat_trainer_render(t, 0, false), "diag/init_train0.ppm");
+        msplat_trainer_step(t);
+        savePPM(msplat_trainer_render(t, 0, false), "diag/step1_train0.ppm");
+        for (int i = 0; i < 200; i++) msplat_trainer_step(t);
+        savePPM(msplat_trainer_render(t, 0, false), "diag/step200_train0.ppm");
+        msplat_trainer_destroy(t);
+        msplat_dataset_destroy(ds);
+    }
     MsplatConfig base = msplat_default_config();
     base.iterations = 1500;
     run("default", argv[1], base);
