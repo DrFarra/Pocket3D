@@ -113,7 +113,8 @@ enum MeshColor {
     }
 
     /// GLB (glTF binario) con color por vértice para Blender: entra derecho (Z arriba, en metros) y con el color ya
-    /// conectado al material. Probado con Blender 5.0: el PLY entra tumbado (asume Z arriba) y el OBJ sin material.
+    /// conectado al material, sin necesitar luces. Probado con Blender 5.0: el PLY entra tumbado (asume Z arriba) y el
+    /// OBJ sin material.
     static func glbData(positions: [SIMD3<Float>], colors: [SIMD3<UInt8>], indices: [UInt32]) throws -> Data {
         precondition(!positions.isEmpty && positions.count == colors.count && indices.count % 3 == 0)
         var bin = Data()
@@ -131,7 +132,9 @@ enum MeshColor {
             "asset": ["version": "2.0", "generator": "Pocket3D"],
             "scene": 0, "scenes": [["nodes": [0]]], "nodes": [["mesh": 0, "name": "Pocket3D"]],
             "meshes": [["primitives": [["attributes": ["POSITION": 0, "COLOR_0": 1], "indices": 2, "material": 0]]]],
-            "materials": [["doubleSided": true,
+            // Sin iluminar: el color ya trae la luz real de las fotos; con luces de Blender una habitación cerrada sale negra.
+            "extensionsUsed": ["KHR_materials_unlit"],
+            "materials": [["doubleSided": true, "extensions": ["KHR_materials_unlit": [String: Any]()],
                            "pbrMetallicRoughness": ["baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 1]]],
             "buffers": [["byteLength": bin.count]],
             "bufferViews": [["buffer": 0, "byteOffset": 0, "byteLength": colorOffset, "target": 34962],
