@@ -35,7 +35,12 @@ check(MeshColor.color(of: [0, -0.5, -2], in: [split, view(color: { _ in [0, 0, 2
 // El coloreado en paralelo da lo mismo que punto a punto (10 000 puntos → varios bloques e hilos).
 let many = (0..<10_000).map { i in SIMD3<Float>(Float(i % 100) / 100 - 0.5, Float(i / 100) / 100 - 0.5, -2) }
 let parallel = MeshColor.colors(of: many, in: [split])
-check(parallel == many.map { MeshColor.color(of: $0, in: [split]) ?? SIMD3(160, 160, 160) }, "colorear en paralelo = colorear uno a uno")
+check(parallel == many.map { MeshColor.color(of: $0, in: [split]) ?? MeshColor.unseen }, "colorear en paralelo = colorear uno a uno")
+
+// Vértices sin foto limpia toman el color de sus vecinos por los triángulos; los aislados quedan grises.
+var gaps: [SIMD3<UInt8>?] = [[200, 0, 0], nil, nil, [0, 0, 100], nil]
+MeshColor.fillGaps(&gaps, indices: [0, 1, 3, 1, 2, 3])
+check(gaps[1] == [66, 0, 66] && gaps[2] == [0, 0, 100] && gaps[4] == nil, "rellenar huecos con el promedio de los vecinos")
 
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]

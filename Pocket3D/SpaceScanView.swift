@@ -240,7 +240,7 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
 
         // shortcut: colorear recorre vértices × vistas en CPU (en paralelo); pasar a Metal si se queda corto.
         try await Task.detached {
-            let colors = MeshColor.colors(of: positions, in: views)
+            let colors = MeshColor.colors(of: positions, in: views, indices: indices)
             if !positions.isEmpty {
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
                 try ply.write(to: Scans.newURL("Espacio", ext: "ply"))
