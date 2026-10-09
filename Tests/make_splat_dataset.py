@@ -21,7 +21,7 @@ def render(c2w):
     axis = np.abs(p).argmax(-1); sign = np.take_along_axis(p, axis[..., None], -1)[..., 0] > 0
     col = faces_col[axis * 2 + sign]
     checker = ((np.floor(p[..., 0] * 8) + np.floor(p[..., 1] * 8) + np.floor(p[..., 2] * 8)) % 2)[..., None]
-    img = np.where(hit[..., None], col * (0.55 + 0.45 * checker), 25)
+    img = np.where(hit[..., None], col * (0.55 + 0.45 * checker), 0)  # fondo negro, como el del entrenamiento
     return img.clip(0, 255).astype(np.uint8)
 
 frames = []

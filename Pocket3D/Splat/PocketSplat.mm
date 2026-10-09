@@ -34,6 +34,9 @@ PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *meta
         config.stopScreenSizeAt = (int)(4000 * scale);
         config.shDegreeInterval = (int)(1000 * scale) > 0 ? (int)(1000 * scale) : 1;
         config.bgColor[0] = config.bgColor[1] = config.bgColor[2] = 0.0f;
+        // El entrenamiento progresivo a baja resolución de msplat da splats borrosos y desplazados
+        // (12 dB frente a 16 dB en la prueba sintética): se entrena siempre a la resolución elegida.
+        config.numDownscales = 0;
         MsplatTrainer trainer = msplat_trainer_create(dataset, config);
         return new Session{dataset, trainer};
     } catch (const std::exception &e) {
