@@ -8,7 +8,7 @@ int main(int argc, char **argv) {
     if (argc < 4) return 2;
     char error[512] = {0};
     const int iterations = 1500;
-    const float minimumPSNR = 22;  // un splat inútil (poses mal, colores al azar) se queda en ~10 dB
+    const float minimumPSNR = 25;  // hoy da ~29 dB; roto (poses mal, fase a baja resolución) daba 10–17 dB
     PocketSplatTrainer trainer = pocket_splat_create(argv[1], argv[2], iterations, 1.0f, true, error, sizeof error);
     if (!trainer) { printf("FALLO al crear: %s\n", error); return 1; }
     int iteration = 0;
