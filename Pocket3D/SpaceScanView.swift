@@ -20,7 +20,9 @@ struct SpaceScanView: View {
                             .font(.headline).foregroundStyle(.black)
                             .background(.yellow, in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
                     } else {
-                        Text("Recorre todo despacio. La malla marca lo ya escaneado · \(model.keyframes) fotos")
+                        Text(model.keyframes >= SpaceScanModel.maximumKeyframes
+                             ? "Ya hay fotos de sobra: puedes guardar"
+                             : "Recorre todo despacio. La malla marca lo ya escaneado · \(model.keyframes) fotos")
                             .font(.callout).foregroundStyle(.white)
                             .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
                     }
@@ -31,7 +33,7 @@ struct SpaceScanView: View {
             }
             .sensoryFeedback(.impact(weight: .light), trigger: model.keyframes)
             .sensoryFeedback(.warning, trigger: model.warning) { _, new in new != nil }
-            .scanChrome(confirmClose: model.keyframes > 0) {
+            .scanChrome(confirmClose: model.keyframes > 0, closeDisabled: saving) {
                 if saving {
                     ProgressView("Guardando…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                 } else {
@@ -66,6 +68,8 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     /// Lo que impide un buen escaneo ahora mismo (velocidad, luz, tracking), en lenguaje claro.
     @Published var warning: String?
     static let minimumKeyframes = 8
+    /// Tope de fotos: más no mejora el resultado y llenaría memoria y disco (~5 MB por foto).
+    static let maximumKeyframes = 400
 
     private let work = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     private var frames: [[String: Any]] = []
@@ -74,11 +78,11 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     private var colorViews: [ColorView] = []
     private var previous: (pose: simd_float4x4, time: TimeInterval)?
     private var speed: Float = 0, turnRate: Float = 0
+    private let config = ARWorldTrackingConfiguration()
 
     func start() {
         try? FileManager.default.createDirectory(at: work.appending(path: "images"), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: work.appending(path: "depth"), withIntermediateDirectories: true)
-        let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { config.frameSemantics.insert(.sceneDepth) }
         if let format = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
@@ -131,7 +135,7 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     /// Nueva foto cada 10 cm o ~10° de giro, solo con tracking bueno, sin ir rápido y de una en una.
     private func considerKeyframe(_ frame: ARFrame) {
         let pose = frame.camera.transform
-        guard case .normal = frame.camera.trackingState, !capturing, !tooFast else { return }
+        guard case .normal = frame.camera.trackingState, !capturing, !tooFast, frames.count < Self.maximumKeyframes else { return }
         if let last = lastPose {
             let moved = simd_distance(last.columns.3, pose.columns.3)
             let forward = simd_dot(simd_normalize(last.columns.2), simd_normalize(pose.columns.2))
@@ -140,12 +144,11 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         capturing = true
         lastPose = pose
         if let view = Dataset.colorView(from: frame, width: 192) { colorViews.append(view) }
-        let depth = frame.sceneDepth
         let index = frames.count
         let work = self.work
         arView.session.captureHighResolutionFrame { [weak self] frame, _ in
             Task.detached {
-                let entry = frame.flatMap { try? Dataset.write($0, depth: depth, index: index, to: work) }
+                let entry = frame.flatMap { try? Dataset.write($0, index: index, to: work) }
                 await MainActor.run {
                     if let entry {
                         self?.frames.append(entry)
@@ -158,7 +161,16 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func save() async throws {
+        // Que termine la foto que se esté guardando, para no meter una a medias en el zip.
+        for _ in 0..<20 where capturing { try? await Task.sleep(for: .milliseconds(100)) }
         arView.session.pause()
+        do { try await export() } catch {
+            arView.session.run(config)  // si falla, la cámara sigue viva para reintentar
+            throw error
+        }
+    }
+
+    private func export() async throws {
         let anchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         guard !anchors.isEmpty || !frames.isEmpty else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Aún no hay nada escaneado. Mueve el iPhone sobre la zona."])
@@ -171,10 +183,10 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         let json = try JSONSerialization.data(withJSONObject: meta, options: .prettyPrinted)
         let hasFrames = !frames.isEmpty
 
-        // shortcut: colorear recorre vértices × vistas en CPU (segundos en escaneos grandes); pasar a Metal si se queda corto.
+        // shortcut: colorear recorre vértices × vistas en CPU (en paralelo); pasar a Metal si se queda corto.
         try await Task.detached {
             if !positions.isEmpty {
-                let colors = positions.map { MeshColor.color(of: $0, in: views) ?? SIMD3(160, 160, 160) }
+                let colors = MeshColor.colors(of: positions, in: views)
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
                 try ply.write(to: Scans.newURL("Espacio", ext: "ply"))
                 if hasFrames { try ply.write(to: work.appending(path: "mesh.ply")) }

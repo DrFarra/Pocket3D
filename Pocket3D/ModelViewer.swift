@@ -10,15 +10,19 @@ import SwiftUI
 struct ModelViewer: View {
     let url: URL
     @Environment(\.dismiss) private var dismiss
+    @State private var scene: SCNScene?
+    @State private var loading = true
 
     var body: some View {
         NavigationStack {
             Group {
                 if Self.isSplat(url) {
                     SplatViewer(url: url)
-                } else if let scene = Self.meshScene(url) {
+                } else if let scene {
                     SceneView(scene: scene, options: [.allowsCameraControl, .autoenablesDefaultLighting])
                         .overlay(alignment: .bottom) { GestureHint(text: "Arrastra para girar · Pellizca para acercar · Dos dedos para mover") }
+                } else if loading {
+                    ProgressView("Abriendo…").tint(.white).foregroundStyle(.white)
                 } else {
                     ContentUnavailableView("No se puede abrir", systemImage: "questionmark.square.dashed",
                                            description: Text(url.lastPathComponent))
@@ -26,6 +30,13 @@ struct ModelViewer: View {
             }
             .ignoresSafeArea(edges: .bottom)
             .background(Color.black)
+            .task {
+                // Una malla grande tarda en leerse: fuera del hilo principal para no congelar la pantalla.
+                guard !Self.isSplat(url) else { return }
+                let url = url
+                scene = await Task.detached { Self.meshScene(url) }.value
+                loading = false
+            }
             .navigationTitle(url.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -38,7 +49,7 @@ struct ModelViewer: View {
 
     static let extensions: Set<String> = ["ply", "spz", "splat", "obj", "stl"]
 
-    static func isSplat(_ url: URL) -> Bool {
+    nonisolated static func isSplat(_ url: URL) -> Bool {
         switch url.pathExtension.lowercased() {
         case "spz", "splat": true
         case "ply": MeshColor.isGaussianSplatPLY(url)
@@ -46,7 +57,7 @@ struct ModelViewer: View {
         }
     }
 
-    static func meshScene(_ url: URL) -> SCNScene? {
+    nonisolated static func meshScene(_ url: URL) -> SCNScene? {
         let asset = MDLAsset(url: url)
         guard asset.count > 0 else { return nil }
         let scene = SCNScene(mdlAsset: asset)
@@ -177,10 +188,14 @@ final class SplatRendererCoordinator: NSObject, MTKViewDelegate {
                 let renderer = try SplatRenderer(device: device, colorFormat: view.colorPixelFormat,
                                                  depthFormat: view.depthStencilPixelFormat, sampleCount: view.sampleCount,
                                                  maxViewCount: 1, maxSimultaneousRenders: 3)
-                let points = try await AutodetectSceneReader(url).readAll()
-                guard !points.isEmpty else { return onError("El archivo no tiene puntos.") }
-                (center, radius) = Self.bounds(points.map(\.position))
-                await renderer.addChunk(try SplatChunk(device: device, from: points))
+                let (chunk, center, radius) = try await Task.detached {
+                    let points = try await AutodetectSceneReader(url).readAll()
+                    guard !points.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+                    let (center, radius) = Self.bounds(points.map(\.position))
+                    return (try SplatChunk(device: device, from: points), center, radius)
+                }.value
+                (self.center, self.radius) = (center, radius)
+                await renderer.addChunk(chunk)
                 self.renderer = renderer
             } catch {
                 onError(error.localizedDescription)
@@ -189,7 +204,7 @@ final class SplatRendererCoordinator: NSObject, MTKViewDelegate {
     }
 
     /// Centro = mediana y radio = percentil 90: ignora los "flotadores" lejanos típicos de los splats.
-    static func bounds(_ positions: [SIMD3<Float>]) -> (center: SIMD3<Float>, radius: Float) {
+    nonisolated static func bounds(_ positions: [SIMD3<Float>]) -> (center: SIMD3<Float>, radius: Float) {
         func median(_ values: [Float]) -> Float { values.sorted()[values.count / 2] }
         let center = SIMD3(median(positions.map(\.x)), median(positions.map(\.y)), median(positions.map(\.z)))
         let distances = positions.map { simd_distance($0, center) }.sorted()
@@ -205,9 +220,12 @@ final class SplatRendererCoordinator: NSObject, MTKViewDelegate {
     }
 
     private func render(_ view: MTKView) {
-        guard let renderer, renderer.isReadyToRender, let drawable = view.currentDrawable,
-              let commandBuffer = commandQueue?.makeCommandBuffer() else { return }
-        inFlight.wait()
+        guard let renderer, renderer.isReadyToRender else { return }
+        inFlight.wait()  // antes de pedir el drawable, para no retenerlo esperando
+        guard let drawable = view.currentDrawable, let commandBuffer = commandQueue?.makeCommandBuffer() else {
+            inFlight.signal()
+            return
+        }
         let semaphore = inFlight
         commandBuffer.addCompletedHandler { _ in semaphore.signal() }
 

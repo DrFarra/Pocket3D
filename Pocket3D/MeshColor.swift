@@ -36,6 +36,21 @@ enum MeshColor {
         return nil
     }
 
+    /// Colorea todos los vértices repartiendo el trabajo entre los núcleos; gris si ninguna foto los ve.
+    static func colors(of positions: [SIMD3<Float>], in views: [ColorView]) -> [SIMD3<UInt8>] {
+        var colors = [SIMD3<UInt8>](repeating: SIMD3(160, 160, 160), count: positions.count)
+        let chunk = 4096
+        colors.withUnsafeMutableBufferPointer { buffer in
+            let out = buffer  // copia del puntero: cada hilo escribe índices distintos
+            DispatchQueue.concurrentPerform(iterations: (positions.count + chunk - 1) / chunk) { c in
+                for i in c * chunk..<min(positions.count, (c + 1) * chunk) {
+                    if let color = color(of: positions[i], in: views) { out[i] = color }
+                }
+            }
+        }
+        return colors
+    }
+
     /// PLY binario con color por vértice: lo abren Blender, MeshLab, CloudCompare, nerfstudio y el visor de la app.
     static func plyData(positions: [SIMD3<Float>], colors: [SIMD3<UInt8>], indices: [UInt32]) -> Data {
         precondition(positions.count == colors.count && indices.count % 3 == 0)

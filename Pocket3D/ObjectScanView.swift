@@ -8,7 +8,9 @@ final class ObjectScanModel: ObservableObject {
     @Published var progress: Double?
     @Published var error: String?
     @Published var done = false
+    @Published var preparingPhotos = false
 
+    private var cancelled = false
     private let work = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     private var images: URL { work.appending(path: "Images/") }
     private var checkpoint: URL { work.appending(path: "Checkpoint/") }
@@ -40,17 +42,30 @@ final class ObjectScanModel: ObservableObject {
             }
             // La sesión de captura debe liberarse antes de reconstruir: ambas no caben en memoria.
             self.session = nil
-            if error == nil { Task { await self.reconstruct() } } else { cleanUp() }
+            if error == nil {
+                Task { await self.reconstruct() }
+            } else {
+                // Si falló a medias, que no se pierdan las fotos: van al zip para el PC.
+                if !cancelled { await exportPhotos() }
+                cleanUp()
+            }
         }
     }
 
+    private func exportPhotos() async {
+        preparingPhotos = true
+        let images = self.images
+        let zipURL = Scans.newURL("Objeto fotos", ext: "zip")
+        try? await Task.detached { try Dataset.exportPhotos(from: images, to: zipURL) }.value
+        preparingPhotos = false
+    }
+
     private func reconstruct() async {
+        // En iPhone la fotogrametría solo llega a calidad .reduced: las fotos van al PC para la versión buena.
+        await exportPhotos()
+        guard !cancelled else { return cleanUp() }
         progress = 0
         do {
-            // En iPhone la fotogrametría solo llega a calidad .reduced: las fotos van al PC para la versión buena.
-            let images = self.images
-            let zipURL = Scans.newURL("Objeto fotos", ext: "zip")
-            try await Task.detached { try Dataset.exportPhotos(from: images, to: zipURL) }.value
             var config = PhotogrammetrySession.Configuration()
             config.checkpointDirectory = checkpoint
             let photogrammetry = try PhotogrammetrySession(input: images, configuration: config)
@@ -72,6 +87,7 @@ final class ObjectScanModel: ObservableObject {
     }
 
     func cancel() {
+        cancelled = true
         session?.cancel()
         photogrammetry?.cancel()
     }
@@ -98,6 +114,8 @@ struct ObjectScanView: View {
             } else if model.done {
                 ContentUnavailableView("Modelo guardado", systemImage: "checkmark.circle",
                                        description: Text("Está en «Mis escaneos»."))
+            } else if model.preparingPhotos {
+                ProgressView("Guardando las fotos…").tint(.white).foregroundStyle(.white)
             } else if let progress = model.progress {
                 VStack(spacing: 16) {
                     ProgressView("Generando modelo 3D… \(Int(progress * 100)) %", value: progress)
@@ -107,7 +125,7 @@ struct ObjectScanView: View {
                 .tint(.white).foregroundStyle(.white).padding(40)
             }
         }
-        .scanChrome(confirmClose: model.session != nil || (model.progress != nil && !model.done && model.error == nil)) {
+        .scanChrome(confirmClose: model.session != nil || model.preparingPhotos || (model.progress != nil && !model.done && model.error == nil)) {
             if model.error != nil { Button("Cerrar") { dismiss() } }
         }
         .task { model.start() }
@@ -121,8 +139,11 @@ struct ObjectScanView: View {
 /// (luz, distancia, velocidad) y no deja terminar con pocas fotos.
 private struct CaptureControls: View {
     let session: ObjectCaptureSession // @Observable: SwiftUI la observa sola
+    @Environment(\.scanPaused) private var paused
     @State private var lockCountdown: Int?
     @State private var reviewing = false
+    /// Se queda en true tras la primera vuelta completa (beginNewScanPass reinicia userCompletedScanPass).
+    @State private var passDone = false
 
     private static let minimumShots = 25
 
@@ -154,7 +175,8 @@ private struct CaptureControls: View {
         }
         .sensoryFeedback(.warning, trigger: warning) { _, new in new != nil }
         .sensoryFeedback(.success, trigger: session.userCompletedScanPass) { _, done in done }
-        .task(id: stateKey) { await automate() }
+        .task(id: "\(stateKey)-\(paused)") { if !paused { await automate() } }
+        .onChange(of: session.userCompletedScanPass) { _, done in if done { passDone = true } }
     }
 
     @ViewBuilder private var buttons: some View {
@@ -176,8 +198,10 @@ private struct CaptureControls: View {
                         Button("Otra vuelta") { session.beginNewScanPass() }.buttonStyle(.bordered)
                     }
                     let missing = Self.minimumShots - session.numberOfShotsTaken
-                    Button(missing > 0 ? "Faltan \(missing) fotos" : "Terminar (\(session.numberOfShotsTaken))") { session.finish() }
-                        .disabled(missing > 0)
+                    Button(missing > 0 ? "Faltan \(missing) fotos" : passDone ? "Terminar (\(session.numberOfShotsTaken))" : "Completa la vuelta") {
+                        session.finish()
+                    }
+                    .disabled(missing > 0 || !passDone)
                 }
             default:
                 ProgressView().tint(.white)
@@ -200,8 +224,9 @@ private struct CaptureControls: View {
         case .detecting:
             var stableTicks = 0
             while !Task.isCancelled, case .detecting = session.state {
-                stableTicks = session.feedback.contains(.objectNotDetected) || session.feedback.contains(.outOfFieldOfView) ? 0 : stableTicks + 1
-                lockCountdown = stableTicks > 0 ? max(1, 3 - stableTicks / 4) : nil
+                // Estable = ningún aviso salvo la luz (que no cambia el encuadre).
+                stableTicks = session.feedback.subtracting([.environmentLowLight]).isEmpty ? stableTicks + 1 : 0
+                lockCountdown = stableTicks > 0 ? 3 - stableTicks * 3 / 8 : nil
                 if stableTicks >= 8 {   // 8 × 0,25 s
                     session.startCapturing()
                     return
@@ -233,7 +258,7 @@ private struct CaptureControls: View {
             if let lockCountdown { "Fijando la caja en \(lockCountdown)… no muevas el iPhone" } else { "Centra el objeto en la pantalla" }
         case .capturing where reviewing: "Puntos = zonas ya capturadas. Los huecos son lo que falta"
         case .capturing where session.userCompletedScanPass: "¡Vuelta completa! Mira cómo va, da otra más alta o más baja, o termina"
-        case .capturing: "Camina despacio alrededor. El anillo se llena con cada foto"
+        case .capturing: "Camina despacio alrededor hasta completar el anillo"
         default: "Preparando…"
         }
     }
