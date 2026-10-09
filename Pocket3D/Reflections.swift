@@ -177,7 +177,7 @@ enum Reflections {
     }
 
     /// Solo el objeto que rodeaste: fuera el suelo y lo que quede fuera de tu vuelta; se queda la pieza más grande
-    /// (y lo que cae sobre ella, como retrovisores o ruedas sueltas). Nil si no fue una vuelta alrededor de algo.
+    /// por superficie (y lo que cae sobre ella, como retrovisores o ruedas sueltas). Nil si no fue una vuelta alrededor de algo.
     /// Devuelve qué vértices de la malla original se quedan (para reaprovechar su color) y los triángulos renumerados.
     static func isolateObject(positions: [SIMD3<Float>], indices: [UInt32], cameras: [SIMD3<Float>], forwards: [SIMD3<Float>])
         -> (vertices: [Int], indices: [UInt32], ground: Float)? {
@@ -201,9 +201,13 @@ enum Reflections {
             let a = root(tri[0])
             for v in tri.dropFirst() { let r = root(v); if r != a { parent[r] = a } }
         }
-        var size = [Int: Int]()
-        for t in stride(from: 0, to: triangles.count, by: 3) { size[root(triangles[t]), default: 0] += 1 }
-        guard let main = size.max(by: { $0.value < $1.value })?.key else { return nil }
+        // Pieza principal = la de más superficie (no la de más triángulos: ARKit los hace de tamaños muy distintos).
+        var area = [Int: Float]()
+        for t in stride(from: 0, to: triangles.count, by: 3) {
+            let (a, b, c) = (positions[triangles[t]], positions[triangles[t + 1]], positions[triangles[t + 2]])
+            area[root(triangles[t]), default: 0] += simd_length(simd_cross(b - a, c - a)) / 2
+        }
+        guard let main = area.max(by: { $0.value < $1.value })?.key else { return nil }
 
         // Huella de la pieza principal (con 20 cm de margen): las piezas sueltas dentro de ella son del objeto.
         var low = SIMD2<Float>(repeating: .greatestFiniteMagnitude), high = -low
