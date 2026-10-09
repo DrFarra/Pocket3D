@@ -2,6 +2,20 @@
 
 En el iPhone, Apple solo permite fotogrametría en calidad reducida y no tiene API para Gaussian splats. Tu RTX 5070 hace la versión de calidad máxima.
 
+## 0. En vivo: el iPhone le manda el escaneo al PC mientras escaneas
+
+1. Instala **Python** desde [python.org](https://www.python.org/downloads/) (marca *Add python.exe to PATH*).
+2. Copia la carpeta [`pc`](pc) de este repositorio a tu PC y haz **doble clic en `Pocket3D PC.bat`**. Si Windows pregunta por el firewall, permite el acceso en **redes privadas**.
+3. En la app, arriba a la izquierda, **PC**: aparece solo (o escribe la IP que muestra la ventana). iPhone y PC en la misma WiFi.
+4. Escanea en modo **Espacio**: en `http://localhost:8765` ves la malla crecer y el recorrido de la cámara en tiempo real. Cada foto con su pose y profundidad LiDAR se guarda en `Documentos\..\Pocket3D\<fecha>` ya en formato nerfstudio (`transforms.json` siempre al día).
+5. Al pulsar *Guardar* en el iPhone, el PC puede procesarlo solo y devolver el resultado a la app («Espacio PC splat»). Para eso arranca el servidor con un comando:
+
+```bat
+"Pocket3D PC.bat" --al-terminar "python entrenar_nerfstudio.py {datos} {salida}"
+```
+
+`entrenar_nerfstudio.py` entrena con nerfstudio (sección 3) usando las poses de ARKit tal cual, así el splat sale a escala y derecho. Sirve cualquier otro programa: `{datos}` es la carpeta del escaneo y `{salida}` el `.ply` que vuelve al iPhone. Sin `--al-terminar`, el dataset queda listo en la carpeta para Postshot o RealityScan.
+
 ## 1. Objeto → malla texturizada de alta calidad: RealityScan (gratis)
 
 1. Descarga **RealityScan** (antes RealityCapture) desde el Epic Games Launcher. Gratis para particulares y empresas con menos de 1 M$ de ingresos.

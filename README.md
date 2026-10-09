@@ -29,6 +29,10 @@ Todo está también en **Archivos → En mi iPhone → Pocket3D → Scans** (pue
 
 Con un Apple ID gratuito la firma caduca a los 7 días: vuelve a pulsar *Start* en Sideloadly (no se pierden los escaneos). Con la cuenta de desarrollador de pago (99 $/año) dura un año.
 
+## En vivo con tu PC
+
+Con **Pocket3D PC** abierto en el ordenador (doble clic en `pc/Pocket3D PC.bat`), el modo Espacio le manda por WiFi cada foto, su pose y la malla mientras escaneas: la ves crecer en la pantalla del PC y, al guardar, su GPU crea la versión fotorrealista y la devuelve a la app. Pasos en [PC.md](PC.md#0-en-vivo-el-iphone-le-manda-el-escaneo-al-pc-mientras-escaneas).
+
 ## Abrir en Blender
 
 Todos los modos dan un modelo que Blender (probado con 5.0) abre a escala real y derecho, sin tocar opciones:

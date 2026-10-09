@@ -4,6 +4,17 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Pocket3D usa la cámara y el LiDAR para escanear en 3D.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Pocket3D manda lo que escaneas a tu PC por la WiFi para verlo en vivo y procesarlo con su tarjeta gráfica.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pocket3d._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

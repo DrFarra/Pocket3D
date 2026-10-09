@@ -15,6 +15,8 @@ jobs:
           plist=Payload/Pocket3D.app/Info.plist
           plutil -extract NSCameraUsageDescription raw "$plist"
           plutil -extract UIFileSharingEnabled raw "$plist"
+          plutil -extract NSLocalNetworkUsageDescription raw "$plist"
+          plutil -extract NSBonjourServices.0 raw "$plist"
           plutil -extract MinimumOSVersion raw "$plist"
           lipo -info Payload/Pocket3D.app/Pocket3D | grep arm64
       - uses: actions/upload-artifact@v4
@@ -28,6 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swiftc Pocket3D/MeshColor.swift Tests/main.swift -o meshcheck && ./meshcheck
+      - run: python3 pc/test_pc.py   # Pocket3D PC con un iPhone simulado
 
   splat:
     # Entrena un splat con el núcleo msplat de la app (Metal) y el puente PocketSplat sobre una escena sintética.
