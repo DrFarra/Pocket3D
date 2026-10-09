@@ -26,7 +26,9 @@ check(MeshColor.color(of: [0, 0, -3], in: [split]) == nil, "punto tapado por la 
 check(MeshColor.color(of: [0, 0, 2], in: [split]) == nil, "punto detrás de la cámara no se colorea")
 check(MeshColor.color(of: [5, 0, -2], in: [split]) == nil, "punto fuera de la imagen no se colorea")
 let blue = view { _ in [0, 0, 255] }
-check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [0, 0, 255], "gana la vista más reciente")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [127, 0, 127], "mezcla las vistas que ven el punto")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue], blend: 1) == [0, 0, 255], "con blend 1 gana la vista más reciente")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split] + Array(repeating: blue, count: 4)) == [0, 0, 255], "solo mezcla las 4 más recientes")
 var moved = matrix_identity_float4x4
 moved.columns.3 = [0, 0, 1, 1]   // cámara 1 m más atrás: la pared queda a 3 m, la profundidad dice 2 m
 check(MeshColor.color(of: [0, -0.5, -2], in: [split, view(color: { _ in [0, 0, 255] }, transform: moved)]) == [255, 0, 0],

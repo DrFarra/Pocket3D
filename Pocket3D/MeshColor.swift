@@ -14,9 +14,12 @@ struct ColorView {
 }
 
 enum MeshColor {
-    /// Color de la vista más reciente que ve el punto sin nada delante (según la profundidad LiDAR).
-    static func color(of point: SIMD3<Float>, in views: [ColorView]) -> SIMD3<UInt8>? {
+    /// Promedio de las `blend` vistas más recientes que ven el punto sin nada delante (según la profundidad LiDAR).
+    /// Una sola foto deja la malla moteada: ruido del sensor y exposición distinta entre fotos vecinas.
+    static func color(of point: SIMD3<Float>, in views: [ColorView], blend: Int = 4) -> SIMD3<UInt8>? {
+        var sum = SIMD3<UInt32>.zero, count = 0
         for view in views.reversed() {
+            if count == blend { break }
             // Convención ARKit/OpenGL: la cámara mira a -Z, Y hacia arriba; la imagen tiene Y hacia abajo.
             let c = view.worldToCamera * SIMD4(point, 1)
             let z = -c.z
@@ -32,9 +35,10 @@ enum MeshColor {
             guard measured > 0, abs(measured - z) < max(0.05, 0.03 * z) else { continue }
 
             let i = (Int(v) * view.width + Int(u)) * 4
-            return SIMD3(view.rgba[i], view.rgba[i + 1], view.rgba[i + 2])
+            sum &+= SIMD3(UInt32(view.rgba[i]), UInt32(view.rgba[i + 1]), UInt32(view.rgba[i + 2]))
+            count += 1
         }
-        return nil
+        return count > 0 ? SIMD3(truncatingIfNeeded: sum / UInt32(count)) : nil
     }
 
     static let unseen = SIMD3<UInt8>(160, 160, 160)
