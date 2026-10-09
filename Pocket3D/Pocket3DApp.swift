@@ -6,6 +6,10 @@ import SwiftUI
 
 @main
 struct Pocket3DApp: App {
+    #if DEBUG
+    init() { Dataset.selfCheck() }
+    #endif
+
     var body: some SwiftUI.Scene {
         WindowGroup { HomeView() }
     }
@@ -47,11 +51,11 @@ struct HomeView: View {
         NavigationStack {
             List {
                 Section("Escanear") {
-                    modeRow(.object, "Objeto", "cube", "Modelo 3D con textura real. Rodea el objeto con el iPhone.",
+                    modeRow(.object, "Objeto", "cube", "Modelo 3D al instante + fotos para calidad máxima en el PC.",
                             supported: ObjectCaptureSession.isSupported)
                     modeRow(.room, "Habitación", "house", "Paredes, puertas, ventanas y muebles con medidas reales.",
                             supported: RoomCaptureSession.isSupported)
-                    modeRow(.space, "Espacio / estructura", "building.2", "Malla LiDAR de cualquier cosa: fachadas, escaleras, terreno…",
+                    modeRow(.space, "Espacio / estructura", "building.2", "Malla LiDAR + fotos con pose y profundidad para splats en el PC.",
                             supported: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh))
                 }
                 Section("Mis escaneos") {

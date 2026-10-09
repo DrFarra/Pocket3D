@@ -46,6 +46,10 @@ final class ObjectScanModel: ObservableObject {
     private func reconstruct() async {
         progress = 0
         do {
+            // En iPhone la fotogrametría solo llega a calidad .reduced: las fotos van al PC para la versión buena.
+            let images = self.images
+            let zipURL = Scans.newURL("Objeto fotos", ext: "zip")
+            try await Task.detached { try Dataset.exportPhotos(from: images, to: zipURL) }.value
             var config = PhotogrammetrySession.Configuration()
             config.checkpointDirectory = checkpoint
             let photogrammetry = try PhotogrammetrySession(input: images, configuration: config)

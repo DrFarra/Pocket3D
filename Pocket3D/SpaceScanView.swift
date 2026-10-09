@@ -3,33 +3,43 @@ import ModelIO
 import RealityKit
 import SwiftUI
 
-/// Reconstrucción LiDAR de ARKit: sin límite de tamaño ni forma → malla USDZ (u OBJ).
+/// Reconstrucción LiDAR de ARKit (malla USDZ para ver al momento) + dataset de fotos con pose y profundidad
+/// para entrenar Gaussian splats o hacer fotogrametría en el PC.
 struct SpaceScanView: View {
     @StateObject private var model = SpaceScanModel()
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
+    @State private var saving = false
 
     var body: some View {
         ARViewRepresentable(arView: model.arView)
             .ignoresSafeArea()
             .overlay(alignment: .top) {
-                Text("Recorre la estructura despacio hasta cubrirla con la malla")
+                Text("Recorre la estructura despacio · \(model.keyframes) fotos")
                     .font(.callout).foregroundStyle(.white)
                     .padding(10).background(.black.opacity(0.5), in: Capsule())
                     .padding(.top, 70)
             }
             .scanChrome {
-                Button("Guardar malla") {
-                    do {
-                        try model.save()
-                        dismiss()
-                    } catch {
-                        self.error = error.localizedDescription
+                if saving {
+                    ProgressView("Guardando…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+                } else {
+                    Button("Guardar") {
+                        saving = true
+                        Task {
+                            do {
+                                try await model.save()
+                                dismiss()
+                            } catch {
+                                self.error = error.localizedDescription
+                            }
+                            saving = false
+                        }
                     }
                 }
             }
             .onAppear { model.start() }
-            .onDisappear { model.arView.session.pause() }
+            .onDisappear { model.stop() }
             .alert("No se pudo guardar", isPresented: .constant(error != nil)) {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "") }
@@ -37,23 +47,84 @@ struct SpaceScanView: View {
 }
 
 @MainActor
-final class SpaceScanModel: ObservableObject {
+final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     let arView = ARView(frame: .zero)
+    @Published var keyframes = 0
+
+    private let work = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    private var frames: [[String: Any]] = []
+    private var lastPose: simd_float4x4?
+    private var capturing = false
 
     func start() {
+        try? FileManager.default.createDirectory(at: work.appending(path: "images"), withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: work.appending(path: "depth"), withIntermediateDirectories: true)
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { config.frameSemantics.insert(.sceneDepth) }
+        if let format = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
+            config.videoFormat = format
+        }
         arView.debugOptions.insert(.showSceneUnderstanding)
+        arView.session.delegate = self
         arView.session.run(config)
     }
 
-    func save() throws {
+    func stop() {
+        arView.session.pause()
+        try? FileManager.default.removeItem(at: work)
+    }
+
+    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        let pose = frame.camera.transform
+        let tracking = frame.camera.trackingState
+        MainActor.assumeIsolated { considerKeyframe(pose: pose, tracking: tracking) }
+    }
+
+    /// Nueva foto cada 10 cm o ~10° de giro, solo con tracking bueno y de una en una.
+    private func considerKeyframe(pose: simd_float4x4, tracking: ARCamera.TrackingState) {
+        guard case .normal = tracking, !capturing else { return }
+        if let last = lastPose {
+            let moved = simd_distance(last.columns.3, pose.columns.3)
+            let forward = simd_dot(simd_normalize(last.columns.2), simd_normalize(pose.columns.2))
+            guard moved > 0.10 || forward < cos(Float.pi / 18) else { return }
+        }
+        capturing = true
+        lastPose = pose
+        let index = frames.count
+        let work = self.work
+        arView.session.captureHighResolutionFrame { [weak self] frame, _ in
+            Task.detached {
+                let entry = frame.flatMap { try? Dataset.write($0, index: index, to: work) }
+                await MainActor.run {
+                    if let entry {
+                        self?.frames.append(entry)
+                        self?.keyframes += 1
+                    }
+                    self?.capturing = false
+                }
+            }
+        }
+    }
+
+    func save() async throws {
+        arView.session.pause()
         let anchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
-        guard !anchors.isEmpty else { throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Aún no hay malla. Mueve el iPhone sobre la zona."]) }
-        // USDZ se previsualiza en el iPhone; OBJ como respaldo si ModelIO no exporta USDZ.
-        let ext = MDLAsset.canExportFileExtension("usdz") ? "usdz" : "obj"
-        // shortcut: exporta en el hilo principal (pausa de ~1 s en escaneos grandes); mover a background si molesta.
-        try Self.asset(from: anchors).export(to: Scans.newURL("Espacio", ext: ext))
+        guard !anchors.isEmpty || !frames.isEmpty else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Aún no hay nada escaneado. Mueve el iPhone sobre la zona."])
+        }
+        if !anchors.isEmpty {
+            // USDZ se previsualiza en el iPhone; OBJ como respaldo si ModelIO no exporta USDZ.
+            let ext = MDLAsset.canExportFileExtension("usdz") ? "usdz" : "obj"
+            try Self.asset(from: anchors).export(to: Scans.newURL("Espacio", ext: ext))
+        }
+        if !frames.isEmpty {
+            let json = try JSONSerialization.data(withJSONObject: ["camera_model": "OPENCV", "frames": frames], options: .prettyPrinted)
+            try json.write(to: work.appending(path: "transforms.json"))
+            let work = self.work
+            let zipURL = Scans.newURL("Espacio dataset", ext: "zip")
+            try await Task.detached { try Dataset.zip(work, to: zipURL) }.value
+        }
     }
 
     /// Une las mallas de todos los anclajes en coordenadas del mundo.

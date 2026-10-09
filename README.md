@@ -1,27 +1,38 @@
 # Pocket3D
 
-Escáner 3D para iPhone. Tres modos, todo se procesa en el propio teléfono:
+Escáner 3D para iPhone con LiDAR (pensado para el 17 Pro Max) + procesado de máxima calidad en un PC con GPU NVIDIA. **No hace falta Mac.**
 
-| Modo | Para qué | Tecnología | Resultado |
-|------|----------|------------|-----------|
-| **Objeto** | Piezas, esculturas, zapatos, comida… | Object Capture + fotogrametría | USDZ con textura real |
-| **Habitación** | Planos de interiores con medidas | RoomPlan | USDZ paramétrico (paredes, puertas, ventanas, muebles) |
-| **Espacio / estructura** | Fachadas, escaleras, terreno, lo que sea | Reconstrucción LiDAR de ARKit | Malla USDZ (u OBJ) a escala real |
+| Modo | En el iPhone (al instante) | Para el PC (calidad máxima) |
+|------|----------------------------|-----------------------------|
+| **Objeto** | Modelo USDZ texturizado (Object Capture) | `… Objeto fotos.zip`: las fotos JPEG a resolución completa → RealityScan / Postshot |
+| **Habitación** | Plano 3D con medidas (RoomPlan, USDZ) | — |
+| **Espacio / estructura** | Malla LiDAR a escala real (USDZ) | `… Espacio dataset.zip`: fotos de alta resolución + pose de ARKit + profundidad LiDAR (formato nerfstudio) → Gaussian splats |
 
-Los escaneos aparecen en «Mis escaneos» (vista 3D/AR con Quick Look, botón compartir) y en la app **Archivos → En mi iPhone → Pocket3D → Scans**, listos para Blender, CAD o impresión 3D.
+Todo queda en «Mis escaneos» (vista 3D/AR y botón compartir) y en **Archivos → En mi iPhone → Pocket3D → Scans**.
 
-## Requisitos
+## Instalar en el iPhone sin Mac (desde Windows)
 
-- iPhone con **LiDAR** (12 Pro / 13 Pro / 14 Pro / 15 Pro / 16 Pro o posterior) con iOS 17+.
-- Mac con Xcode 16 o posterior.
+1. En GitHub: pestaña **Actions** → último run verde de **Build** → descarga el artefacto **Pocket3D-ipa** (es un zip; dentro está `Pocket3D.ipa`).
+2. Instala en el PC **iTunes** (versión de la web de Apple, no la de Microsoft Store) y **[Sideloadly](https://sideloadly.io)**.
+3. Conecta el iPhone por cable, abre Sideloadly, arrastra `Pocket3D.ipa`, pon tu Apple ID y pulsa *Start*.
+4. En el iPhone: *Ajustes → General → VPN y gestión de dispositivos* → confía en tu Apple ID; y *Ajustes → Privacidad y seguridad → Modo de desarrollador* → activar (reinicia).
 
-## Instalar en tu iPhone
+Con un Apple ID gratuito la firma caduca a los 7 días: vuelve a pulsar *Start* en Sideloadly (no se pierden los escaneos). Con la cuenta de desarrollador de pago (99 $/año) dura un año.
 
-1. Abre `Pocket3D.xcodeproj` en Xcode.
-2. Target *Pocket3D* → *Signing & Capabilities* → elige tu *Team* (sirve un Apple ID gratuito). Si el bundle id choca, cámbialo.
-3. Conecta el iPhone, selecciónalo arriba y pulsa ▶︎.
+## Pasar los escaneos al PC
 
-## Consejos para buenos escaneos
+- **Cable**: app *Dispositivos Apple* (o iTunes) → tu iPhone → *Archivos* → Pocket3D → arrastra la carpeta `Scans`.
+- **Inalámbrico**: en «Mis escaneos» toca el zip → compartir → Google Drive / OneDrive / iCloud Drive.
 
-- **Objeto**: buena luz difusa, objeto sobre una superficie lisa y despejada; da 2–3 vueltas a distintas alturas.
-- **Espacio**: muévete despacio y vuelve a pasar por zonas sin malla; el LiDAR alcanza ~5 m.
+## Procesar en el PC (RTX 5070)
+
+Ver **[PC.md](PC.md)**.
+
+## Consejos de captura
+
+- **Objeto**: luz difusa, sin brillos directos, objeto sobre superficie lisa; 2–3 vueltas a distintas alturas.
+- **Espacio**: camina despacio (la app guarda una foto cada ~10 cm o ~10°), vuelve a pasar por zonas sin malla y termina cerca de donde empezaste (cierra el bucle). El LiDAR alcanza ~5 m.
+
+## Desarrollo
+
+`Pocket3D.xcodeproj` (Xcode 16+, iOS 17+). Cada push compila en GitHub Actions (macOS) y publica la IPA.
