@@ -127,6 +127,8 @@ struct HomeView: View {
     @State private var viewing: URL?
     @State private var importing = false
     @State private var importError: String?
+    @State private var showingPC = false
+    @ObservedObject private var pc = PCLink.shared
 
     var body: some View {
         NavigationStack {
@@ -158,8 +160,19 @@ struct HomeView: View {
             .navigationTitle("Pocket3D")
             .refreshable { scans = Scans.all() }
             .toolbar {
-                Button("Importar del PC", systemImage: "square.and.arrow.down") { importing = true }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingPC = true } label: {
+                        Label(pc.isConnected ? "PC conectado" : "PC", systemImage: pc.isConnected ? "desktopcomputer.and.arrow.down" : "desktopcomputer")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .tint(pc.isConnected ? .green : .indigo)
+                }
+                ToolbarItem { Button("Importar del PC", systemImage: "square.and.arrow.down") { importing = true } }
             }
+            .sheet(isPresented: $showingPC) { PCSheet() }
+            .task { pc.start() }
+            // Llegó un splat procesado en el PC: a la lista.
+            .onChange(of: pc.resultsReceived) { scans = Scans.all() }
         }
         .tint(.indigo)
         .quickLookPreview($preview)
@@ -206,6 +219,47 @@ struct HomeView: View {
     private func delete(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
         scans = Scans.all()
+    }
+}
+
+/// Conectar con Pocket3D PC: el escaneo de Espacio se ve en vivo en el ordenador y su GPU hace la versión fotorrealista.
+private struct PCSheet: View {
+    @ObservedObject private var pc = PCLink.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if let name = pc.name {
+                        Label("Conectado a \(name)", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Label("Buscando el PC en tu WiFi…", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    if let state = pc.remoteState, pc.isConnected {
+                        LabeledContent("Último escaneo", value: state.capitalized)
+                    }
+                } footer: {
+                    Text("Con el PC conectado, el modo Espacio le manda cada foto y la malla mientras escaneas: lo ves crecer en la pantalla del ordenador y, al guardar, su GPU crea la versión fotorrealista y la devuelve aquí.")
+                }
+                Section {
+                    TextField("Ej. 192.168.1.20", text: $pc.manualAddress)
+                        .keyboardType(.numbersAndPunctuation).textInputAutocapitalization(.never).autocorrectionDisabled()
+                } header: {
+                    Text("Dirección del PC (si no aparece solo)")
+                } footer: {
+                    Text("La muestra la ventana de Pocket3D PC al abrirse. El iPhone y el PC tienen que estar en la misma WiFi.")
+                }
+                Section("En el PC (una vez)") {
+                    Label("Instala Python desde python.org", systemImage: "1.circle")
+                    Label("Descarga la carpeta «pc» de Pocket3D (GitHub)", systemImage: "2.circle")
+                    Label("Doble clic en «Pocket3D PC.bat» y permite el acceso en redes privadas", systemImage: "3.circle")
+                }
+            }
+            .navigationTitle("Tu PC")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Listo") { dismiss() } }
+        }
     }
 }
 

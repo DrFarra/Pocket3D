@@ -3,3 +3,4 @@ xcuserdata/
 build/
 DerivedData/
 research_notes/
+__pycache__/

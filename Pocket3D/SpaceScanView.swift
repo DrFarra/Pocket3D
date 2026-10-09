@@ -11,6 +11,7 @@ struct SpaceScanView: View {
     @State private var saving = false
     @State private var dismissAfterAlert = false
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var pc = PCLink.shared
 
     var body: some View {
         Group {
@@ -25,9 +26,10 @@ struct SpaceScanView: View {
                             .font(.headline).foregroundStyle(.black)
                             .background(.yellow, in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
                     } else {
-                        Text(model.keyframes >= SpaceScanModel.maximumKeyframes
+                        Text((model.keyframes >= SpaceScanModel.maximumKeyframes
                              ? "Ya hay fotos de sobra: puedes guardar"
                              : "Recorre todo despacio. La malla marca lo ya escaneado · \(model.keyframes) fotos")
+                             + (model.pcScan != nil ? "\nEn vivo en \(pc.name ?? "el PC")" : ""))
                             .font(.callout).foregroundStyle(.white)
                             .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
                     }
@@ -40,7 +42,8 @@ struct SpaceScanView: View {
             .sensoryFeedback(.warning, trigger: model.warning) { _, new in new != nil }
             .scanChrome(confirmClose: model.keyframes > 0, closeDisabled: saving) {
                 if saving {
-                    ProgressView("Guardando…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+                    ProgressView(pc.pending > 0 && model.pcScan != nil ? "Enviando al PC… \(pc.pending)" : "Guardando…")
+                        .padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                 } else {
                     Button(model.keyframes < SpaceScanModel.minimumKeyframes ? "Faltan \(SpaceScanModel.minimumKeyframes - model.keyframes) fotos" : "Guardar") {
                         saving = true
@@ -49,6 +52,13 @@ struct SpaceScanView: View {
                                 try await model.save()
                             } catch {
                                 self.error = error.localizedDescription
+                                saving = false
+                                return
+                            }
+                            // Con el PC procesándolo, no hace falta esperar al iPhone: su GPU lo hace mejor y más rápido.
+                            if await model.finishOnPC() {
+                                dismissAfterAlert = true
+                                self.error = "Guardado. Tu PC está creando la versión fotorrealista: aparecerá en «Mis escaneos» al terminar (deja la app abierta)."
                                 saving = false
                                 return
                             }
@@ -132,6 +142,9 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     private var capturing = false
     private var colorViews: [ColorView] = []
     private var recentSharpness: [Float] = []
+    /// Escaneo abierto en Pocket3D PC (nil = sin PC): recibe cada foto y la malla mientras escaneas.
+    @Published private(set) var pcScan: String?
+    private var lastMeshSent: TimeInterval = 0
     private var blurryRejected = 0
     /// Dónde hay superficie real (celdas de 15 cm): lo que el splat ponga lejos de ahí es basura flotante.
     private var surfaceCells = Set<SIMD3<Int32>>()
@@ -151,6 +164,7 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         arView.debugOptions.insert(.showSceneUnderstanding)
         arView.session.delegate = self
         arView.session.run(config)
+        Task { pcScan = await PCLink.shared.beginScan() }
     }
 
     func stop() {
@@ -177,6 +191,25 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         if warning != self.warning { self.warning = warning }
         previous = (pose, frame.timestamp)
         considerKeyframe(frame)
+        sendMeshToPC(frame)
+    }
+
+    /// Cada 3 s, la malla actual al PC para verla crecer allí. Si la WiFi va atrasada, se salta: las fotos importan más.
+    private func sendMeshToPC(_ frame: ARFrame) {
+        guard let scan = pcScan, frame.timestamp - lastMeshSent > 3, PCLink.shared.pending < 8 else { return }
+        lastMeshSent = frame.timestamp
+        let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+        guard !anchors.isEmpty else { return }
+        let (rawPositions, rawIndices) = Self.mesh(from: anchors)   // copia ya: ARKit reescribe sus buffers
+        Task {
+            let glb = await Task.detached {
+                let (positions, indices) = MeshColor.clean(positions: rawPositions, indices: rawIndices)
+                guard !positions.isEmpty else { return nil as Data? }
+                return try? MeshColor.glbData(positions: positions, colors: Array(repeating: MeshColor.unseen, count: positions.count),
+                                              indices: indices, unlit: false)
+            }.value
+            if let glb { PCLink.shared.send(data: glb, as: "mesh.glb", scan: scan) }
+        }
     }
 
     private static func warning(for frame: ARFrame, tooFast: Bool) -> String? {
@@ -226,11 +259,28 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
                     if let entry {
                         self?.frames.append(entry)
                         self?.keyframes += 1
+                        self?.sendFrameToPC(entry, work: work)
                     }
                     self?.capturing = false
                 }
             }
         }
+    }
+
+    private func sendFrameToPC(_ entry: [String: Any], work: URL) {
+        guard let scan = pcScan else { return }
+        for key in ["file_path", "depth_file_path"] {
+            if let path = entry[key] as? String { PCLink.shared.send(file: work.appending(path: path), as: path, scan: scan) }
+        }
+        PCLink.shared.addFrame(entry, scan: scan)
+    }
+
+    /// Tras guardar: la malla en color al PC (nube de partida del splat) y aviso de fin. True si el PC lo va a procesar.
+    func finishOnPC() async -> Bool {
+        guard let scan = pcScan else { return false }
+        let mesh = work.appending(path: "mesh.ply")
+        if FileManager.default.fileExists(atPath: mesh.path) { PCLink.shared.send(file: mesh, as: "mesh.ply", scan: scan) }
+        return await PCLink.shared.finish(scan: scan)
     }
 
     func save() async throws {

@@ -245,7 +245,11 @@ struct OrbitCamera: Equatable {
     private var back: SIMD3<Float> { SIMD3(cos(pitch) * sin(yaw), sin(pitch), cos(pitch) * cos(yaw)) }
     var forward: SIMD3<Float> { -back }
 
-    static func trainedHere(_ url: URL) -> Bool { url.lastPathComponent.hasSuffix("Espacio splat.ply") }
+    /// Splats de Espacio (entrenados en el iPhone o en Pocket3D PC): conservan las poses de ARKit, con Y arriba.
+    static func trainedHere(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        return name.contains("Espacio") && name.hasSuffix("splat.ply")
+    }
     static let orientations: [simd_quatf] = [
         simd_quatf(angle: .pi, axis: [0, 0, 1]),        // COLMAP / Postshot: Y hacia abajo
         simd_quatf(angle: -.pi / 2, axis: [1, 0, 0]),   // nerfstudio: Z hacia arriba
