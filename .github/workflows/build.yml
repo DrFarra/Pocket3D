@@ -10,7 +10,35 @@ jobs:
       - run: xcodebuild -project Pocket3D.xcodeproj -target Pocket3D -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO build
       # IPA sin firmar: Sideloadly (Windows) la firma con tu Apple ID al instalarla.
       - run: mkdir Payload && cp -R build/Release-iphoneos/Pocket3D.app Payload/ && zip -qr Pocket3D.ipa Payload
+      - name: Comprobar la IPA
+        run: |
+          plist=Payload/Pocket3D.app/Info.plist
+          plutil -extract NSCameraUsageDescription raw "$plist"
+          plutil -extract UIFileSharingEnabled raw "$plist"
+          plutil -extract MinimumOSVersion raw "$plist"
+          lipo -info Payload/Pocket3D.app/Pocket3D | grep arm64
       - uses: actions/upload-artifact@v4
         with:
           name: Pocket3D-ipa
           path: Pocket3D.ipa
+
+  launch:
+    # Arranca la app (Debug, con Dataset.selfCheck) en un simulador y comprueba que sigue viva.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -project Pocket3D.xcodeproj -target Pocket3D -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+      - name: Lanzar en simulador
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r,l in d.items() if 'iOS' in r for x in l if 'iPhone' in x['name']))")
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid"
+          xcrun simctl install "$udid" build/Debug-iphonesimulator/Pocket3D.app
+          xcrun simctl launch "$udid" com.drfarra.Pocket3D
+          sleep 15
+          xcrun simctl io "$udid" screenshot home.png
+          xcrun simctl spawn "$udid" launchctl list | grep com.drfarra.Pocket3D
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshot
+          path: home.png
