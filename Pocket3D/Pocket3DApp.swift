@@ -112,7 +112,7 @@ enum Scans {
     }
 
     /// Lo que se puede abrir; las texturas y .mtl que acompañan a un .obj importado no se listan.
-    static let listed: Set<String> = ["usdz", "reality", "ply", "spz", "splat", "obj", "stl", "zip"]
+    static let listed: Set<String> = ["usdz", "reality", "ply", "spz", "splat", "obj", "stl", "glb", "zip"]
 
     static func all() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
@@ -194,11 +194,13 @@ struct HomeView: View {
     /// Tras escanear o importar, abre directamente el resultado (no los zips para el PC).
     private func openNewest(since before: Set<URL>) {
         scans = Scans.all()
-        if let new = scans.first(where: { !before.contains($0) && $0.pathExtension.lowercased() != "zip" }) { open(new) }
+        if let new = scans.first(where: { !before.contains($0) && !["zip", "glb"].contains($0.pathExtension.lowercased()) }) { open(new) }
     }
 
     private func open(_ url: URL) {
-        if ModelViewer.extensions.contains(url.pathExtension.lowercased()) { viewing = url } else { preview = url }
+        let ext = url.pathExtension.lowercased()
+        // Las habitaciones .usdz también: Quick Look solo deja verlas por fuera.
+        if ModelViewer.extensions.contains(ext) || (ext == "usdz" && ModelViewer.isRoom(url)) { viewing = url } else { preview = url }
     }
 
     private func delete(_ url: URL) {
@@ -274,7 +276,8 @@ private struct ScanRow: View {
     }
 
     private var ext: String { url.pathExtension.lowercased() }
-    private var isForPC: Bool { ext == "zip" }
+    /// Fotos para procesar en el PC y mallas para Blender: no se abren aquí, se envían.
+    private var isForPC: Bool { ext == "zip" || ext == "glb" }
     private var isSplat: Bool { ModelViewer.isSplat(url) }
 
     /// "2026-10-09 12.30.05 Espacio dataset" → fecha + "Espacio".
@@ -291,6 +294,7 @@ private struct ScanRow: View {
     private var kind: String {
         switch ext {
         case "zip": "Fotos y datos"
+        case "glb": "Para Blender"
         case "usdz", "reality": "Modelo 3D · AR"
         case "ply", "spz", "splat": isSplat ? "Gaussian splat" : "Malla en color"
         default: "Malla 3D"
@@ -309,6 +313,7 @@ private struct ScanRow: View {
     private var icon: String {
         switch ext {
         case "zip": "shippingbox.fill"
+        case "glb": "cube.transparent.fill"
         case "usdz", "reality": parts.name.hasPrefix("Habitación") || parts.name.hasPrefix("Plano") ? "house.fill" : "cube.fill"
         default: isSplat ? "sparkles" : "square.stack.3d.up.fill"
         }
@@ -317,6 +322,7 @@ private struct ScanRow: View {
     private var color: Color {
         switch ext {
         case "zip": .indigo
+        case "glb": .orange
         case "usdz", "reality": parts.name.hasPrefix("Habitación") || parts.name.hasPrefix("Plano") ? .blue : .orange
         default: isSplat ? .pink : .purple
         }

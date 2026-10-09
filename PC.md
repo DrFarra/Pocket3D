@@ -49,4 +49,4 @@ Pasa el resultado al iPhone (`.ply`/`.spz` del splat, u `.obj` de RealityScan) p
 | Imprimir en 3D / CAD / medir un objeto | RealityScan con `Objeto fotos.zip` |
 | Que se vea como una foto, desde cualquier ángulo | Postshot con cualquiera de los zips |
 | Medidas de una estancia | El USDZ de Habitación (RoomPlan) |
-| Malla en color a escala de una fachada o terreno | El PLY de Espacio (directo del iPhone; ábrelo en Blender, MeshLab o CloudCompare) |
+| Malla en color a escala de una fachada o terreno | El `Espacio para Blender.glb` (directo del iPhone) o el PLY de Espacio en MeshLab / CloudCompare |

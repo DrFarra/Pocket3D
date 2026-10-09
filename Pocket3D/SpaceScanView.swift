@@ -244,6 +244,8 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             if !positions.isEmpty {
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
                 try ply.write(to: Scans.newURL("Espacio", ext: "ply"))
+                try MeshColor.glbData(positions: positions, colors: colors, indices: indices)
+                    .write(to: Scans.newURL("Espacio para Blender", ext: "glb"))
                 if hasFrames { try ply.write(to: work.appending(path: "mesh.ply")) }
             }
             if hasFrames {

@@ -6,21 +6,21 @@ import SceneKit.ModelIO
 import SplatIO
 import SwiftUI
 
-/// Visor 3D dentro de la app: Gaussian splats (.ply/.spz/.splat de Postshot o nerfstudio) y mallas (.ply/.obj/.stl).
+/// Visor 3D dentro de la app: Gaussian splats (.ply/.spz/.splat de Postshot o nerfstudio), mallas (.ply/.obj/.stl)
+/// y habitaciones (.usdz de RoomPlan). Se ve por fuera (girando alrededor) o por dentro (parado en el centro).
 struct ModelViewer: View {
     let url: URL
     @Environment(\.dismiss) private var dismiss
-    @State private var scene: SCNScene?
+    @State private var mesh: MeshScene?
     @State private var loading = true
 
     var body: some View {
         NavigationStack {
             Group {
                 if Self.isSplat(url) {
-                    SplatViewer(url: url)
-                } else if let scene {
-                    SceneView(scene: scene, options: [.allowsCameraControl, .autoenablesDefaultLighting])
-                        .overlay(alignment: .bottom) { GestureHint(text: "Arrastra para girar · Pellizca para acercar · Dos dedos para mover") }
+                    SplatViewer(url: url, inside: Self.isRoom(url))
+                } else if let mesh {
+                    MeshViewer(mesh: mesh, inside: Self.isRoom(url))
                 } else if loading {
                     ProgressView("Abriendo…").tint(.white).foregroundStyle(.white)
                 } else {
@@ -34,7 +34,7 @@ struct ModelViewer: View {
                 // Una malla grande tarda en leerse: fuera del hilo principal para no congelar la pantalla.
                 guard !Self.isSplat(url) else { return }
                 let url = url
-                scene = await Task.detached { Self.meshScene(url) }.value
+                mesh = await Task.detached { Self.meshScene(url) }.value
                 loading = false
             }
             .navigationTitle(url.deletingPathExtension().lastPathComponent)
@@ -49,6 +49,12 @@ struct ModelViewer: View {
 
     static let extensions: Set<String> = ["ply", "spz", "splat", "obj", "stl"]
 
+    /// Habitaciones y espacios: se abren por dentro y los .usdz van a este visor en vez de Quick Look (solo por fuera).
+    nonisolated static func isRoom(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        return name.contains("Habitación") || name.contains("Plano") || name.contains("Espacio")
+    }
+
     nonisolated static func isSplat(_ url: URL) -> Bool {
         switch url.pathExtension.lowercased() {
         case "spz", "splat": true
@@ -57,61 +63,145 @@ struct ModelViewer: View {
         }
     }
 
-    nonisolated static func meshScene(_ url: URL) -> SCNScene? {
-        let asset = MDLAsset(url: url)
-        guard asset.count > 0 else { return nil }
-        let scene = SCNScene(mdlAsset: asset)
-        // Los colores por vértice (malla de Espacio) se ven mejor sin sombreado fuerte.
+    nonisolated static func meshScene(_ url: URL) -> MeshScene? {
+        let scene: SCNScene
+        if url.pathExtension.lowercased() == "usdz" {
+            guard let loaded = try? SCNScene(url: url) else { return nil }
+            scene = loaded
+        } else {
+            let asset = MDLAsset(url: url)
+            guard asset.count > 0 else { return nil }
+            scene = SCNScene(mdlAsset: asset)
+        }
+        // Los colores por vértice (malla de Espacio) se ven mejor sin sombreado fuerte; doble cara para verla por dentro.
         scene.rootNode.enumerateHierarchy { node, _ in
             node.geometry?.materials.forEach { $0.lightingModel = .lambert; $0.isDoubleSided = true }
         }
-        return scene
+        let (low, high) = scene.rootNode.boundingBox
+        let center = (SIMD3<Float>(low) + SIMD3<Float>(high)) / 2
+        let radius = max(simd_distance(SIMD3<Float>(low), SIMD3<Float>(high)) / 2, 0.01)
+        let camera = SCNNode()
+        camera.camera = SCNCamera()
+        camera.camera?.fieldOfView = 60   // igual que el visor de splats
+        camera.camera?.zNear = Double(radius) * 0.005
+        camera.camera?.zFar = Double(radius) * 100
+        scene.rootNode.addChildNode(camera)
+        return MeshScene(scene: scene, camera: camera, center: center, radius: radius)
     }
 }
 
-/// Gaussian splat con MetalSplatter. Arrastra para girar, pellizca para acercar, doble toque para cambiar qué eje es "arriba".
-private struct SplatViewer: View {
-    let url: URL
-    @State private var camera: OrbitCamera
-    @State private var startCamera: OrbitCamera?
-    @State private var error: String?
+/// Malla lista para ver, con su propia cámara: la de SceneKit solo gira alrededor y no deja entrar.
+struct MeshScene {
+    let scene: SCNScene
+    let camera: SCNNode
+    let center: SIMD3<Float>
+    let radius: Float
+}
 
-    init(url: URL) {
-        self.url = url
-        // Los splats entrenados en la app conservan el "arriba" de ARKit (Y); los del PC suelen venir con Y hacia abajo.
-        _camera = State(initialValue: OrbitCamera(orientation: OrbitCamera.trainedHere(url) ? 2 : 0))
+private struct MeshViewer: View {
+    let mesh: MeshScene
+    @State private var camera: OrbitCamera
+
+    init(mesh: MeshScene, inside: Bool) {
+        self.mesh = mesh
+        _camera = State(initialValue: OrbitCamera(orientation: 2, inside: inside))  // SceneKit y ARKit: Y arriba
     }
 
     var body: some View {
-        SplatMetalView(url: url, camera: camera, error: $error)
+        SceneView(scene: mesh.scene, pointOfView: mesh.camera, options: [.autoenablesDefaultLighting, .rendersContinuously])
+            .cameraControls($camera, radius: mesh.radius, canFlip: false)
+            .onChange(of: camera, initial: true) {
+                mesh.camera.simdTransform = camera.viewMatrix(center: mesh.center, radius: mesh.radius).inverse
+            }
+    }
+}
+
+/// Gaussian splat con MetalSplatter. Doble toque cambia qué eje es "arriba".
+private struct SplatViewer: View {
+    let url: URL
+    @State private var camera: OrbitCamera
+    @State private var radius: Float = 1
+    @State private var error: String?
+
+    init(url: URL, inside: Bool) {
+        self.url = url
+        // Los splats entrenados en la app conservan el "arriba" de ARKit (Y); los del PC suelen venir con Y hacia abajo.
+        _camera = State(initialValue: OrbitCamera(orientation: OrbitCamera.trainedHere(url) ? 2 : 0, inside: inside))
+    }
+
+    var body: some View {
+        SplatMetalView(url: url, camera: camera, radius: $radius, error: $error)
             .overlay {
                 if let error {
                     ContentUnavailableView("No se pudo cargar el splat", systemImage: "exclamationmark.triangle", description: Text(error))
                 }
             }
+            .cameraControls($camera, radius: radius, canFlip: true)
+    }
+}
+
+/// Gestos de los dos visores. Por fuera: girar alrededor y acercar. Por dentro: mirar alrededor y caminar.
+private struct CameraControls: ViewModifier {
+    @Binding var camera: OrbitCamera
+    let radius: Float
+    let canFlip: Bool
+    @State private var start: OrbitCamera?
+
+    func body(content: Content) -> some View {
+        content
             .gesture(DragGesture()
                 .onChanged { value in
-                    let start = startCamera ?? camera
-                    startCamera = start
-                    camera.yaw = start.yaw - Float(value.translation.width) * 0.01
-                    camera.pitch = min(1.5, max(-1.5, start.pitch + Float(value.translation.height) * 0.01))
+                    let begin = start ?? camera
+                    start = begin
+                    // Por dentro se arrastra el mundo, como en una foto 360°: sentido contrario a girar alrededor.
+                    let k: Float = camera.inside ? 0.005 : -0.01
+                    camera.yaw = begin.yaw + k * Float(value.translation.width)
+                    camera.pitch = min(1.5, max(-1.5, begin.pitch - k * Float(value.translation.height)))
                 }
-                .onEnded { _ in startCamera = nil })
+                .onEnded { _ in start = nil })
             .simultaneousGesture(MagnifyGesture()
                 .onChanged { value in
-                    let start = startCamera ?? camera
-                    startCamera = start
-                    camera.zoom = min(20, max(0.05, start.zoom / Float(value.magnification)))
+                    let begin = start ?? camera
+                    start = begin
+                    let scale = Float(value.magnification)
+                    if camera.inside {
+                        // Abrir los dedos = avanzar hacia donde miras, sin salir mucho del escaneo.
+                        let walk = begin.walk + begin.forward * (scale - 1) * radius * 0.6
+                        camera.walk = simd_length(walk) > radius * 1.5 ? simd_normalize(walk) * radius * 1.5 : walk
+                    } else {
+                        camera.zoom = min(20, max(0.05, begin.zoom / scale))
+                    }
                 }
-                .onEnded { _ in startCamera = nil })
-            .onTapGesture(count: 2) { camera.orientation = (camera.orientation + 1) % OrbitCamera.orientations.count }
-            .overlay(alignment: .bottom) { GestureHint(text: "Arrastra para girar · Pellizca para acercar · Doble toque si sale torcido") }
+                .onEnded { _ in start = nil })
+            .onTapGesture(count: 2) {
+                if canFlip { camera.orientation = (camera.orientation + 1) % OrbitCamera.orientations.count }
+            }
+            .overlay(alignment: .bottom) {
+                GestureHint(text: (camera.inside ? "Arrastra para mirar alrededor · Pellizca para avanzar"
+                                                 : "Arrastra para girar · Pellizca para acercar")
+                                  + (canFlip ? " · Doble toque si sale torcido" : ""))
+                    .id(camera.inside)  // vuelve a mostrarse al cambiar de modo
+            }
+            .overlay(alignment: .top) {
+                Picker("Vista", selection: Binding(get: { camera.inside },
+                                                   set: { camera = OrbitCamera(orientation: camera.orientation, inside: $0) })) {
+                    Text("Por fuera").tag(false)
+                    Text("Por dentro").tag(true)
+                }
+                .pickerStyle(.segmented).frame(maxWidth: 260).padding(.top, 8)
+            }
             .overlay(alignment: .topTrailing) {
-                Button { withAnimation { camera = OrbitCamera(orientation: camera.orientation) } } label: {
+                Button { withAnimation { camera = OrbitCamera(orientation: camera.orientation, inside: camera.inside) } } label: {
                     Image(systemName: "scope").font(.title2).padding(12).background(.ultraThinMaterial, in: Circle())
                 }
                 .padding().accessibilityLabel("Centrar vista")
             }
+    }
+}
+
+extension View {
+    fileprivate func cameraControls(_ camera: Binding<OrbitCamera>, radius: Float, canFlip: Bool) -> some View {
+        modifier(CameraControls(camera: camera, radius: radius, canFlip: canFlip))
     }
 }
 
@@ -135,10 +225,23 @@ private struct GestureHint: View {
     }
 }
 
-struct OrbitCamera {
-    var yaw: Float = 0, pitch: Float = 0.2, zoom: Float = 1
+struct OrbitCamera: Equatable {
+    var yaw: Float = 0, pitch: Float, zoom: Float = 1
     /// Cada herramienta deja el "arriba" en un eje distinto; doble toque prueba el siguiente.
-    var orientation = 0
+    var orientation: Int
+    /// Por dentro: el ojo está en el centro (+ lo caminado) y mira hacia fuera.
+    var inside: Bool
+    var walk = SIMD3<Float>.zero
+
+    init(orientation: Int = 0, inside: Bool = false) {
+        self.orientation = orientation
+        self.inside = inside
+        pitch = inside ? 0 : 0.2
+    }
+
+    /// Desde el centro hacia el ojo cuando se gira alrededor; por dentro se mira en sentido contrario.
+    private var back: SIMD3<Float> { SIMD3(cos(pitch) * sin(yaw), sin(pitch), cos(pitch) * cos(yaw)) }
+    var forward: SIMD3<Float> { -back }
 
     static func trainedHere(_ url: URL) -> Bool { url.lastPathComponent.hasSuffix("Espacio splat.ply") }
     static let orientations: [simd_quatf] = [
@@ -148,10 +251,13 @@ struct OrbitCamera {
     ]
 
     func viewMatrix(center: SIMD3<Float>, radius: Float) -> simd_float4x4 {
-        let distance = radius * 2.2 * zoom
-        let eye = center + distance * SIMD3(cos(pitch) * sin(yaw), sin(pitch), cos(pitch) * cos(yaw))
         let rotation = simd_float4x4(Self.orientations[orientation])
         let pivot = simd_float4x4(translation: center) * rotation * simd_float4x4(translation: -center)
+        if inside {
+            let eye = center + walk
+            return .lookAt(eye: eye, target: eye + forward, up: [0, 1, 0]) * pivot
+        }
+        let eye = center + radius * 2.2 * zoom * back
         return .lookAt(eye: eye, target: center, up: [0, 1, 0]) * pivot
     }
 }
@@ -159,6 +265,7 @@ struct OrbitCamera {
 private struct SplatMetalView: UIViewRepresentable {
     let url: URL
     let camera: OrbitCamera
+    @Binding var radius: Float
     @Binding var error: String?
 
     func makeCoordinator() -> SplatRendererCoordinator { SplatRendererCoordinator() }
@@ -169,7 +276,7 @@ private struct SplatMetalView: UIViewRepresentable {
         view.depthStencilPixelFormat = .depth32Float
         view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         view.delegate = context.coordinator
-        context.coordinator.load(url, into: view) { error = $0 }
+        context.coordinator.load(url, into: view, onLoad: { radius = $0 }) { error = $0 }
         return view
     }
 
@@ -188,7 +295,7 @@ final class SplatRendererCoordinator: NSObject, MTKViewDelegate {
     private var drawableSize = CGSize(width: 1, height: 1)
     private let inFlight = DispatchSemaphore(value: 3)
 
-    func load(_ url: URL, into view: MTKView, onError: @escaping (String) -> Void) {
+    func load(_ url: URL, into view: MTKView, onLoad: @escaping (Float) -> Void, onError: @escaping (String) -> Void) {
         guard let device = view.device else { return onError("Este dispositivo no tiene Metal.") }
         commandQueue = device.makeCommandQueue()
         Task {
@@ -205,6 +312,7 @@ final class SplatRendererCoordinator: NSObject, MTKViewDelegate {
                 (self.center, self.radius) = (center, radius)
                 await renderer.addChunk(chunk)
                 self.renderer = renderer
+                onLoad(radius)
             } catch {
                 onError(error.localizedDescription)
             }

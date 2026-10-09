@@ -26,7 +26,9 @@ check(MeshColor.color(of: [0, 0, -3], in: [split]) == nil, "punto tapado por la 
 check(MeshColor.color(of: [0, 0, 2], in: [split]) == nil, "punto detrás de la cámara no se colorea")
 check(MeshColor.color(of: [5, 0, -2], in: [split]) == nil, "punto fuera de la imagen no se colorea")
 let blue = view { _ in [0, 0, 255] }
-check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [0, 0, 255], "gana la vista más reciente")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [127, 0, 127], "mezcla las vistas que ven el punto")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue], blend: 1) == [0, 0, 255], "con blend 1 gana la vista más reciente")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split] + Array(repeating: blue, count: 4)) == [0, 0, 255], "solo mezcla las 4 más recientes")
 var moved = matrix_identity_float4x4
 moved.columns.3 = [0, 0, 1, 1]   // cámara 1 m más atrás: la pared queda a 3 m, la profundidad dice 2 m
 check(MeshColor.color(of: [0, -0.5, -2], in: [split, view(color: { _ in [0, 0, 255] }, transform: moved)]) == [255, 0, 0],
@@ -41,6 +43,15 @@ check(parallel == many.map { MeshColor.color(of: $0, in: [split]) ?? MeshColor.u
 var gaps: [SIMD3<UInt8>?] = [[200, 0, 0], nil, nil, [0, 0, 100], nil]
 MeshColor.fillGaps(&gaps, indices: [0, 1, 3, 1, 2, 3])
 check(gaps[1] == [66, 0, 66] && gaps[2] == [0, 0, 100] && gaps[4] == nil, "rellenar huecos con el promedio de los vecinos")
+
+// GLB para Blender: cabecera, bloques alineados a 4 y vistas que cubren el binario (el formato lo verificó Blender 5.0).
+let glb = try! MeshColor.glbData(positions: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], colors: [[255, 0, 0], [0, 255, 0], [0, 0, 255]], indices: [0, 1, 2])
+func word(_ at: Int) -> Int { Int(glb[at]) | Int(glb[at + 1]) << 8 | Int(glb[at + 2]) << 16 | Int(glb[at + 3]) << 24 }
+let jsonLength = word(12)
+let gltf = try! JSONSerialization.jsonObject(with: glb[20..<20 + jsonLength]) as! [String: Any]
+let views = gltf["bufferViews"] as! [[String: Int]]
+check(word(0) == 0x4654_6C67 && word(8) == glb.count && jsonLength % 4 == 0 && word(20 + jsonLength) % 4 == 0, "GLB: cabecera y bloques válidos")
+check(views.map { $0["byteLength"]! } == [36, 12, 12] && word(20 + jsonLength) == 60, "GLB: posiciones, colores RGBA e índices en el binario")
 
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
