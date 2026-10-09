@@ -84,6 +84,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
         ]
         case .space: [
             Tip(icon: "tortoise.fill", text: "Camina despacio: la app guarda una foto cada 10 cm y vibra suavemente con cada una."),
+            Tip(icon: "car.fill", text: "¿Un objeto grande, como un auto? Rodéalo despacio: la app te dice cuándo dar otra vuelta más alta y guarda también «Espacio objeto», solo con él, sin suelo ni lo de alrededor."),
             Tip(icon: "exclamationmark.triangle.fill", text: "Si el aviso se pone rojo, ve más despacio: así las fotos no salen movidas."),
             Tip(icon: "arrow.triangle.capsulepath", text: "Cubre todo con la malla (hasta ~5 m) y termina cerca de donde empezaste."),
             Tip(icon: "sparkles", text: "Espejos, ventanas y suelos brillantes: la app quita sola lo que aparece reflejado tras las paredes o bajo el suelo, y los brillos de las lámparas no manchan el color."),

@@ -258,21 +258,45 @@ enum MeshColor {
     }
 
     /// Quita del splat las gaussianas que flotan lejos de toda superficie que vio el LiDAR (nubes en el aire, típicas
-    /// de los splats). Lee el PLY de msplat (todo float, x y z primero) y lo reescribe. No toca nada si quitaría más
-    /// de la mitad: eso indicaría coordenadas que no cuadran, no basura.
+    /// de los splats). No toca nada si quitaría más de la mitad: eso indicaría coordenadas que no cuadran, no basura.
     @discardableResult
     static func pruneSplat(at url: URL, near cells: Set<SIMD3<Int32>>, cell: Float) throws -> Int {
-        let data = try Data(contentsOf: url)
-        guard let end = data.range(of: Data("end_header\n".utf8)) else { return 0 }
+        guard let result = filterSplat(try Data(contentsOf: url), keep: { isNear($0, cells, cell) }) else { return 0 }
+        let removed = result.total - result.kept
+        guard removed > 0, removed * 2 <= result.total else { return 0 }
+        try result.ply.write(to: url, options: .atomic)
+        return removed
+    }
+
+    /// Copia del splat con solo el objeto escaneado: lo que toca su superficie y está por encima del suelo.
+    static func isolateSplat(from url: URL, to output: URL, cells: Set<SIMD3<Int32>>, cell: Float, ground: Float) throws -> Bool {
+        guard let result = filterSplat(try Data(contentsOf: url), keep: { $0.y > ground + 0.04 && isNear($0, cells, cell) }),
+              result.kept > 0 else { return false }
+        try result.ply.write(to: output, options: .atomic)
+        return true
+    }
+
+    /// La celda del punto o alguna de sus 26 vecinas está ocupada: hasta ~2 celdas de la superficie.
+    static func isNear(_ p: SIMD3<Float>, _ cells: Set<SIMD3<Int32>>, _ cell: Float) -> Bool {
+        let c = SIMD3<Int32>(p / cell, rounding: .down)
+        for dx: Int32 in -1...1 { for dy: Int32 in -1...1 { for dz: Int32 in -1...1 where cells.contains(c &+ SIMD3(dx, dy, dz)) {
+            return true
+        } } }
+        return false
+    }
+
+    /// Filtra un PLY de msplat (todo float, x y z primero) gaussiana a gaussiana. Nil si no tiene ese formato.
+    static func filterSplat(_ data: Data, keep: (SIMD3<Float>) -> Bool) -> (ply: Data, kept: Int, total: Int)? {
+        guard let end = data.range(of: Data("end_header\n".utf8)) else { return nil }
         let header = String(decoding: data[..<end.upperBound], as: UTF8.self)
         let lines = header.split(separator: "\n")
         guard header.contains("binary_little_endian"),
               let countLine = lines.first(where: { $0.hasPrefix("element vertex ") }),
               let count = Int(countLine.dropFirst("element vertex ".count)),
-              lines.filter({ $0.hasPrefix("property") }).allSatisfy({ $0.hasPrefix("property float ") }) else { return 0 }
+              lines.filter({ $0.hasPrefix("property") }).allSatisfy({ $0.hasPrefix("property float ") }) else { return nil }
         let stride = lines.filter { $0.hasPrefix("property") }.count * 4
         let body = data[end.upperBound...]
-        guard stride >= 12, body.count >= count * stride else { return 0 }
+        guard stride >= 12, body.count >= count * stride else { return nil }
 
         var kept = Data()
         kept.reserveCapacity(count * stride)
@@ -282,25 +306,15 @@ enum MeshColor {
                 let row = raw.baseAddress!.advanced(by: i * stride)
                 let p = SIMD3(row.loadUnaligned(as: Float.self), row.loadUnaligned(fromByteOffset: 4, as: Float.self),
                               row.loadUnaligned(fromByteOffset: 8, as: Float.self))
-                let c = SIMD3<Int32>(p / cell, rounding: .down)
-                var near = false
-                // La celda y sus 26 vecinas: hasta ~2 celdas de la superficie.
-                search: for dx: Int32 in -1...1 { for dy: Int32 in -1...1 { for dz: Int32 in -1...1 where cells.contains(c &+ SIMD3(dx, dy, dz)) {
-                    near = true
-                    break search
-                } } }
-                if near {
+                if keep(p) {
                     kept.append(row.assumingMemoryBound(to: UInt8.self), count: stride)
                     keptCount += 1
                 }
             }
         }
-        let removed = count - keptCount
-        guard removed > 0, removed * 2 <= count else { return 0 }
         var out = Data(header.replacingOccurrences(of: String(countLine), with: "element vertex \(keptCount)").utf8)
         out.append(kept)
-        try out.write(to: url, options: .atomic)
-        return removed
+        return (out, keptCount, count)
     }
 
     /// PLY binario con color por vértice: lo abren Blender, MeshLab, CloudCompare, nerfstudio y el visor de la app.

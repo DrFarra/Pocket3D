@@ -111,6 +111,133 @@ enum Reflections {
         return (outPositions, outIndices, removed)
     }
 
+    // MARK: Objeto aislado
+
+    /// El iPhone dio la vuelta a algo mirando hacia dentro (un auto, una estatua), en vez de mirar hacia fuera
+    /// (una habitación): la mayoría de las fotos apunta al centro del recorrido y lo rodea por ≥ 9 de 12 lados.
+    static func isOrbit(cameras: [SIMD3<Float>], forwards: [SIMD3<Float>]) -> Bool {
+        guard cameras.count >= 12, cameras.count == forwards.count else { return false }
+        let ground = cameras.map { SIMD2($0.x, $0.z) }
+        let center = ground.reduce(.zero, +) / Float(ground.count)
+        let inward = zip(ground, forwards).map { camera, forward -> Float in
+            let toCenter = center - camera, look = SIMD2(forward.x, forward.z)
+            guard simd_length(toCenter) > 0.3, simd_length(look) > 0.2 else { return 0 }
+            return simd_dot(simd_normalize(toCenter), simd_normalize(look))
+        }.sorted()
+        guard inward[inward.count / 2] > 0.6 else { return false }
+        let sectors = Set(ground.map { p -> Int in
+            let d = p - center
+            return Int((atan2(d.y, d.x) + .pi) / (.pi / 6)) % 12
+        })
+        return sectors.count >= 9
+    }
+
+    /// Progreso de una vuelta alrededor de un objeto, para guiar mientras se escanea: de 12 lados (de 30°), cuántos se
+    /// han fotografiado a la altura normal y cuántos desde arriba (≥ 35 cm más alto que la vuelta normal). Nil si no parece una
+    /// vuelta alrededor de algo (pocas fotos o mirando hacia fuera).
+    static func orbitProgress(cameras: [SIMD3<Float>], forwards: [SIMD3<Float>]) -> (sides: Int, highSides: Int)? {
+        guard cameras.count >= 8, cameras.count == forwards.count else { return nil }
+        // Centro = el punto al que más apuntan las fotos (mínimos cuadrados entre rayos), válido con media vuelta.
+        var a = simd_float2x2(), b = SIMD2<Float>.zero
+        var rays = [(origin: SIMD2<Float>, direction: SIMD2<Float>)]()
+        for (camera, forward) in zip(cameras, forwards) {
+            let d = SIMD2(forward.x, forward.z)
+            guard simd_length(d) > 0.2 else { continue }
+            let n = simd_normalize(d), o = SIMD2(camera.x, camera.z)
+            let projector = simd_float2x2(rows: [SIMD2(1 - n.x * n.x, -n.x * n.y), SIMD2(-n.x * n.y, 1 - n.y * n.y)])
+            a += projector
+            b += projector * o
+            rays.append((o, n))
+        }
+        guard rays.count >= 8, abs(a.determinant) > 1e-3 else { return nil }
+        let center = a.inverse * b
+        let inward = rays.map { ray -> Float in
+            let toCenter = center - ray.origin
+            return simd_length(toCenter) > 0.3 ? simd_dot(simd_normalize(toCenter), ray.direction) : 0
+        }.sorted()
+        guard inward[inward.count / 2] > 0.6 else { return nil }
+        // Referencia: la altura de la vuelta normal (el cuartil bajo, que la vuelta alta no mueve).
+        let heights = cameras.map(\.y).sorted()
+        let high = heights[heights.count / 4] + 0.35
+        var low = Set<Int>(), top = Set<Int>()
+        for camera in cameras {
+            let d = SIMD2(camera.x, camera.z) - center
+            let side = Int((atan2(d.y, d.x) + .pi) / (.pi / 6)) % 12
+            if camera.y > high { top.insert(side) } else { low.insert(side) }
+        }
+        return (low.count, top.count)
+    }
+
+    /// Altura del suelo: el plano horizontal grande más bajo.
+    static func groundHeight(positions: [SIMD3<Float>], indices: [UInt32]) -> Float? {
+        planes(positions: positions, indices: indices)
+            .filter { abs($0.normal.y) > cos(Float.pi * 5 / 36) }
+            .map { $0.offset / $0.normal.y }
+            .min()
+    }
+
+    /// Solo el objeto que rodeaste: fuera el suelo y lo que quede fuera de tu vuelta; se queda la pieza más grande
+    /// por superficie (y lo que cae sobre ella, como retrovisores o ruedas sueltas). Nil si no fue una vuelta alrededor de algo.
+    /// Devuelve qué vértices de la malla original se quedan (para reaprovechar su color) y los triángulos renumerados.
+    static func isolateObject(positions: [SIMD3<Float>], indices: [UInt32], cameras: [SIMD3<Float>], forwards: [SIMD3<Float>])
+        -> (vertices: [Int], indices: [UInt32], ground: Float)? {
+        guard isOrbit(cameras: cameras, forwards: forwards),
+              let ground = groundHeight(positions: positions, indices: indices) else { return nil }
+        let walked = convexHull(cameras.map { SIMD2($0.x, $0.z) })
+        let candidate = positions.map { $0.y > ground + 0.04 && contains(walked, SIMD2($0.x, $0.z)) }
+
+        // Piezas conexas entre los triángulos que quedan.
+        var parent = Array(0..<positions.count)
+        func root(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x] }
+            return x
+        }
+        var triangles = [Int]()
+        for t in stride(from: 0, to: indices.count - indices.count % 3, by: 3) {
+            let tri = indices[t..<t + 3].map(Int.init)
+            guard tri.allSatisfy({ candidate[$0] }) else { continue }
+            triangles += tri
+            let a = root(tri[0])
+            for v in tri.dropFirst() { let r = root(v); if r != a { parent[r] = a } }
+        }
+        // Pieza principal = la de más superficie (no la de más triángulos: ARKit los hace de tamaños muy distintos).
+        var area = [Int: Float]()
+        for t in stride(from: 0, to: triangles.count, by: 3) {
+            let (a, b, c) = (positions[triangles[t]], positions[triangles[t + 1]], positions[triangles[t + 2]])
+            area[root(triangles[t]), default: 0] += simd_length(simd_cross(b - a, c - a)) / 2
+        }
+        guard let main = area.max(by: { $0.value < $1.value })?.key else { return nil }
+
+        // Huella de la pieza principal (con 20 cm de margen): las piezas sueltas dentro de ella son del objeto.
+        var low = SIMD2<Float>(repeating: .greatestFiniteMagnitude), high = -low
+        for t in stride(from: 0, to: triangles.count, by: 3) where root(triangles[t]) == main {
+            for v in triangles[t..<t + 3] { let q = SIMD2(positions[v].x, positions[v].z); low = simd_min(low, q); high = simd_max(high, q) }
+        }
+        low -= 0.2; high += 0.2
+        // Centro de cada pieza, en una sola pasada.
+        var sums = [Int: SIMD3<Float>]()   // x, z y número de vértices
+        for t in stride(from: 0, to: triangles.count, by: 3) {
+            let r = root(triangles[t])
+            for v in triangles[t..<t + 3] { sums[r, default: .zero] += SIMD3(positions[v].x, positions[v].z, 1) }
+        }
+        func belongs(_ r: Int) -> Bool {
+            guard r != main, let s = sums[r] else { return r == main }
+            let c = SIMD2(s.x, s.y) / s.z
+            return c.x >= low.x && c.y >= low.y && c.x <= high.x && c.y <= high.y
+        }
+
+        var newIndex = [Int](repeating: -1, count: positions.count)
+        var vertices = [Int](), outIndices = [UInt32]()
+        for t in stride(from: 0, to: triangles.count, by: 3) where belongs(root(triangles[t])) {
+            for v in triangles[t..<t + 3] {
+                if newIndex[v] < 0 { newIndex[v] = vertices.count; vertices.append(v) }
+                outIndices.append(UInt32(newIndex[v]))
+            }
+        }
+        return (vertices, outIndices, ground)
+    }
+
     /// Envolvente convexa (cadena monótona de Andrew), en sentido antihorario.
     static func convexHull(_ points: [SIMD2<Float>]) -> [SIMD2<Float>] {
         let sorted = points.sorted { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
