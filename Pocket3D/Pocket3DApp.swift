@@ -139,15 +139,14 @@ struct HomeView: View {
                     Text("Mis escaneos")
                 } footer: {
                     if !scans.isEmpty {
-                        Text("Los marcados «Para el PC» se procesan en RealityScan o Postshot (ver guía). Con «Importar» traes aquí el resultado para verlo.")
+                        Text("«Enviar al PC» manda las fotos para procesarlas en RealityScan o Postshot. Con el botón Importar (arriba) traes aquí el resultado para verlo.")
                     }
                 }
             }
             .navigationTitle("Pocket3D")
             .refreshable { scans = Scans.all() }
             .toolbar {
-                Button("Importar", systemImage: "square.and.arrow.down") { importing = true }
-                    .labelStyle(.titleAndIcon)
+                Button("Importar del PC", systemImage: "square.and.arrow.down") { importing = true }
             }
         }
         .tint(.indigo)
@@ -218,10 +217,11 @@ private struct ScanRow: View {
     let open: () -> Void
 
     var body: some View {
+        // .plain: sin esto el texto de la fila hereda el color de acento.
         if isForPC {
-            ShareLink(item: url) { label }
+            ShareLink(item: url) { label }.buttonStyle(.plain)
         } else {
-            Button(action: open) { label }
+            Button(action: open) { label }.buttonStyle(.plain)
         }
     }
 
@@ -237,10 +237,16 @@ private struct ScanRow: View {
             }
             Spacer(minLength: 0)
             if isForPC {
-                Text("Para el PC").font(.caption2.weight(.semibold)).padding(.horizontal, 8).padding(.vertical, 4)
+                Label("Enviar al PC", systemImage: "square.and.arrow.up")
+                    .font(.caption.weight(.semibold)).labelStyle(.titleAndIcon)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(.indigo.opacity(0.15), in: Capsule()).foregroundStyle(.indigo)
+                    .fixedSize()
+            } else {
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
             }
         }
+        .contentShape(Rectangle())  // toda la fila es tocable, también el hueco del Spacer
     }
 
     private var ext: String { url.pathExtension.lowercased() }
@@ -260,7 +266,7 @@ private struct ScanRow: View {
 
     private var kind: String {
         switch ext {
-        case "zip": "Fotos y datos · toca para enviar"
+        case "zip": "Fotos y datos"
         case "usdz", "reality": "Modelo 3D · AR"
         case "ply", "spz", "splat": isSplat ? "Gaussian splat" : "Malla en color"
         default: "Malla 3D"
