@@ -152,6 +152,31 @@ check(Reflections.removePhantoms(positions: room.p, indices: room.i, cameras: lo
       "con el iPhone fuera, no quita más que con él dentro")
 check(Reflections.convexHull([[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0.5]]).count == 4, "envolvente convexa")
 
+// Objeto aislado: un auto (4 × 1,8 × 1,5 m) sobre el suelo, un arbusto al lado y un retrovisor suelto pegado al auto.
+room = ([], [])
+add([grid([-5, 0, -5], [10, 0, 0], [0, 0, 10])])               // suelo
+add(cube([-2, 0, -0.9], [4, 1.5, 1.8]))                        // auto
+add(cube([1.0, 0.9, 0.95], [0.2, 0.15, 0.1]))                  // retrovisor, fuera de la carrocería
+add(cube([2.6, 0, -0.3], [0.5, 0.8, 0.5]))                     // arbusto
+let ring = (0..<24).map { k in SIMD3<Float>(3.5 * cos(Float(k) * .pi / 12), 1.5, 3.5 * sin(Float(k) * .pi / 12)) }
+let inward = ring.map { simd_normalize(SIMD3<Float>(0, 0.5, 0) - $0) }
+check(Reflections.isOrbit(cameras: ring, forwards: inward), "dar la vuelta mirando al centro = escanear un objeto")
+check(!Reflections.isOrbit(cameras: ring, forwards: inward.map { -$0 }), "mirando hacia fuera (una habitación) no lo es")
+let half = Reflections.orbitProgress(cameras: Array(ring.prefix(12)), forwards: Array(inward.prefix(12)))
+check(half?.sides == 6 && half?.highSides == 0, "media vuelta = 6 de 12 lados (\(String(describing: half)))")
+let raised = ring.map { $0 + SIMD3<Float>(0, 0.6, 0) }
+let twoLoops = Reflections.orbitProgress(cameras: ring + raised, forwards: inward + raised.map { simd_normalize(SIMD3<Float>(0, 0.5, 0) - $0) })
+check(twoLoops?.sides == 12 && twoLoops?.highSides == 12, "dos vueltas, una alta: todo cubierto")
+check(Reflections.orbitProgress(cameras: ring, forwards: inward.map { -$0 }) == nil, "en una habitación no hay guía de vuelta")
+if let car = Reflections.isolateObject(positions: room.p, indices: room.i, cameras: ring, forwards: inward) {
+    let kept = car.vertices.map { room.p[$0] }
+    check(abs(car.ground) < 0.01 && !kept.isEmpty && kept.allSatisfy { $0.y > 0.04 }, "sin suelo")
+    check(!kept.contains { $0.x > 2.4 }, "sin el arbusto de al lado")
+    check(kept.contains { abs($0.y - 1.5) < 0.01 } && kept.contains { $0.z > 0.94 && $0.y > 0.9 }, "con el techo y el retrovisor")
+} else {
+    check(false, "aislar el auto")
+}
+
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
 let colors: [SIMD3<UInt8>] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]

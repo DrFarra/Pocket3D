@@ -52,7 +52,8 @@ struct ModelViewer: View {
     /// Habitaciones y espacios: se abren por dentro y los .usdz van a este visor en vez de Quick Look (solo por fuera).
     nonisolated static func isRoom(_ url: URL) -> Bool {
         let name = url.lastPathComponent
-        return name.contains("Habitación") || name.contains("Plano") || name.contains("Espacio")
+        // «Espacio objeto»: un objeto que rodeaste (un auto) se mira por fuera.
+        return (name.contains("Habitación") || name.contains("Plano") || name.contains("Espacio")) && !name.contains("objeto")
     }
 
     nonisolated static func isSplat(_ url: URL) -> Bool {

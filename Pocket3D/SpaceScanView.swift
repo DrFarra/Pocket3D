@@ -28,7 +28,7 @@ struct SpaceScanView: View {
                     } else {
                         Text((model.keyframes >= SpaceScanModel.maximumKeyframes
                              ? "Ya hay fotos de sobra: puedes guardar"
-                             : "Recorre todo despacio. La malla marca lo ya escaneado · \(model.keyframes) fotos")
+                             : model.guidance ?? "Recorre todo despacio. La malla marca lo ya escaneado")
                              + (model.pcScan != nil ? "\nEn vivo en \(pc.name ?? "el PC")" : ""))
                             .font(.callout).foregroundStyle(.white)
                             .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
@@ -134,21 +134,28 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     private let splatCancel = CancelFlag()
     static let minimumKeyframes = 8
     /// Tope de fotos: más no mejora el resultado y llenaría memoria y disco (~5 MB por foto).
-    static let maximumKeyframes = 400
+    static let maximumKeyframes = 800
 
     private let work = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     private var frames: [[String: Any]] = []
-    private var lastPose: simd_float4x4?
+    /// Poses de las fotos ya guardadas: una foto nueva tiene que mostrar algo que ninguna otra muestre.
+    private var keyPoses: [simd_float4x4] = []
     private var capturing = false
     private var colorViews: [ColorView] = []
     private var recentSharpness: [Float] = []
     /// Escaneo abierto en Pocket3D PC (nil = sin PC): recibe cada foto y la malla mientras escaneas.
     @Published private(set) var pcScan: String?
+    /// Qué hacer ahora cuando rodeas un objeto (nil = escaneo de un espacio, sin vueltas que guiar).
+    @Published private(set) var guidance: String?
     private var lastMeshSent: TimeInterval = 0
     private var blurryRejected = 0
     /// Dónde hay superficie real (celdas de 15 cm): lo que el splat ponga lejos de ahí es basura flotante.
     private var surfaceCells = Set<SIMD3<Int32>>()
     nonisolated static let surfaceCell: Float = 0.15
+    /// Si diste la vuelta a un objeto (un auto): su superficie (celdas de 10 cm) y la altura del suelo, para guardar
+    /// también el splat solo con él.
+    private var object: (cells: Set<SIMD3<Int32>>, ground: Float)?
+    nonisolated static let objectCell: Float = 0.10
     private var previous: (pose: simd_float4x4, time: TimeInterval)?
     private var speed: Float = 0, turnRate: Float = 0
     private let config = ARWorldTrackingConfiguration()
@@ -225,15 +232,12 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         return nil
     }
 
-    /// Nueva foto cada 10 cm o ~10° de giro, solo con tracking bueno, sin ir rápido y de una en una.
+    /// Nueva foto si ninguna de las ya guardadas está a menos de 10 cm y ~10° de esta: así una segunda vuelta a otra
+    /// altura suma fotos y repetir el mismo camino no llena la memoria. Solo con tracking bueno, sin ir rápido.
     private func considerKeyframe(_ frame: ARFrame) {
         let pose = frame.camera.transform
-        guard case .normal = frame.camera.trackingState, !capturing, !tooFast, frames.count < Self.maximumKeyframes else { return }
-        if let last = lastPose {
-            let moved = simd_distance(last.columns.3, pose.columns.3)
-            let forward = simd_dot(simd_normalize(last.columns.2), simd_normalize(pose.columns.2))
-            guard moved > 0.10 || forward < cos(Float.pi / 18) else { return }
-        }
+        guard case .normal = frame.camera.trackingState, !capturing, !tooFast, frames.count < Self.maximumKeyframes,
+              Self.isNovel(pose, among: keyPoses) else { return }
         let view = Dataset.colorView(from: frame, width: 192)
         if let view {
             // Temblor de mano: la foto sale corrida aunque el iPhone no vaya rápido. Se compara con las últimas
@@ -248,7 +252,8 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             recentSharpness = Array((recentSharpness + [sharpness]).suffix(15))
         }
         capturing = true
-        lastPose = pose
+        keyPoses.append(pose)
+        updateGuidance()
         if let view { colorViews.append(view) }
         let index = frames.count
         let work = self.work
@@ -283,6 +288,29 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         return await PCLink.shared.finish(scan: scan)
     }
 
+    /// En vez de contar fotos (que no dice nada), qué falta: la vuelta completa, otra desde arriba, o nada.
+    private func updateGuidance() {
+        let cameras = keyPoses.map { SIMD3($0.columns.3.x, $0.columns.3.y, $0.columns.3.z) }
+        let forwards = keyPoses.map { -SIMD3($0.columns.2.x, $0.columns.2.y, $0.columns.2.z) }
+        guard let progress = Reflections.orbitProgress(cameras: cameras, forwards: forwards) else { guidance = nil; return }
+        let new: String
+        if progress.sides < 11 {
+            new = "Sigue rodeándolo despacio: llevas \(progress.sides * 100 / 12) % de la vuelta"
+        } else if progress.highSides < 9 {
+            new = "¡Vuelta completa! Ahora otra con el iPhone más alto, mirando hacia abajo · \(progress.highSides * 100 / 12) %"
+        } else {
+            new = "¡Listo! Ya puedes guardar (otra vuelta más baja mejora aún más el detalle)"
+        }
+        if new != guidance { guidance = new }
+    }
+
+    static func isNovel(_ pose: simd_float4x4, among poses: [simd_float4x4]) -> Bool {
+        let forward = simd_normalize(pose.columns.2)
+        return !poses.contains { other in
+            simd_distance(other.columns.3, pose.columns.3) < 0.10 && simd_dot(simd_normalize(other.columns.2), forward) > cos(Float.pi / 18)
+        }
+    }
+
     func save() async throws {
         // Que termine la foto que se esté guardando, para no meter una a medias en el zip.
         for _ in 0..<20 where capturing { try? await Task.sleep(for: .milliseconds(100)) }
@@ -307,12 +335,24 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         let hasFrames = !frames.isEmpty
 
         // shortcut: colorear recorre vértices × vistas en CPU (en paralelo); pasar a Metal si se queda corto.
-        surfaceCells = try await Task.detached {
+        (surfaceCells, object) = try await Task.detached {
             let welded = MeshColor.clean(positions: rawPositions, indices: rawIndices)
             // Reflejos de espejos, vidrios y suelos brillantes: fuera lo que quede tras las paredes o bajo el suelo.
             let cameras = views.map { view in let c = view.worldToCamera.inverse.columns.3; return SIMD3(c.x, c.y, c.z) }
             let (positions, indices, _) = Reflections.removePhantoms(positions: welded.positions, indices: welded.indices, cameras: cameras)
             let colors = MeshColor.colors(of: positions, in: views, indices: indices)
+            // ¿Diste la vuelta a algo? Entonces, además, el objeto solo: sin suelo ni lo de alrededor.
+            let forwards = views.map { view in let f = view.worldToCamera.inverse.columns.2; return -SIMD3(f.x, f.y, f.z) }
+            var object: (cells: Set<SIMD3<Int32>>, ground: Float)?
+            if let isolated = Reflections.isolateObject(positions: positions, indices: indices, cameras: cameras, forwards: forwards),
+               !isolated.indices.isEmpty {
+                let objectPositions = isolated.vertices.map { positions[$0] }, objectColors = isolated.vertices.map { colors[$0] }
+                try MeshColor.plyData(positions: objectPositions, colors: objectColors, indices: isolated.indices)
+                    .write(to: Scans.newURL("Espacio objeto", ext: "ply"))
+                try? MeshColor.glbData(positions: objectPositions, colors: objectColors, indices: isolated.indices)
+                    .write(to: Scans.newURL("Espacio objeto para Blender", ext: "glb"))
+                object = (MeshColor.occupiedCells(objectPositions, cell: Self.objectCell), isolated.ground)
+            }
             if !positions.isEmpty {
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
                 try ply.write(to: Scans.newURL("Espacio", ext: "ply"))
@@ -332,8 +372,9 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
                 try MeshColor.plyData(positions: picks.map { positions[$0] }, colors: picks.map { colors[$0] }, indices: [])
                     .write(to: work.appending(path: SplatTrainer.initialCloud))
             }
-            return MeshColor.occupiedCells(positions, cell: Self.surfaceCell)
+            return (MeshColor.occupiedCells(positions, cell: Self.surfaceCell), object)
         }.value
+        colorViews = []   // ya coloreado: con hasta 800 fotos ocupan ~150 MB que el entrenamiento necesita
     }
 
     /// Gaussian splat fotorrealista entrenado en el iPhone con las fotos, las poses de ARKit y la malla en color.
@@ -357,9 +398,15 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         if !saved {
             throw SplatTrainer.Failure(errorDescription: "Se terminó demasiado pronto para guardar el splat.")
         }
-        let cells = surfaceCells
+        let cells = surfaceCells, object = self.object
         if !cells.isEmpty {
             try? await Task.detached { try MeshColor.pruneSplat(at: output, near: cells, cell: Self.surfaceCell) }.value
+        }
+        if let object {
+            _ = try? await Task.detached {
+                try MeshColor.isolateSplat(from: output, to: Scans.newURL("Espacio objeto splat", ext: "ply"),
+                                           cells: object.cells, cell: Self.objectCell, ground: object.ground)
+            }.value
         }
     }
 
