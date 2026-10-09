@@ -24,7 +24,7 @@ struct Pocket3DApp: App {
 }
 
 enum ScanMode: String, Identifiable, CaseIterable {
-    case object, room, space
+    case object, room, space, pc
     var id: Self { self }
 
     var title: String {
@@ -32,6 +32,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
         case .object: "Objeto"
         case .room: "Habitación"
         case .space: "Espacio o estructura"
+        case .pc: "Modo PC"
         }
     }
 
@@ -40,6 +41,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
         case .object: "Piezas, figuras, zapatos… Modelo 3D con su textura real."
         case .room: "Plano con medidas: paredes, puertas, ventanas y muebles. Una o varias habitaciones."
         case .space: "Fachadas, escaleras, terreno, lo que sea. Malla 3D en color a escala real."
+        case .pc: "El iPhone captura y tu PC calcula en vivo: ves sobre la cámara la malla que va haciendo."
         }
     }
 
@@ -48,6 +50,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
         case .object: "cube.fill"
         case .room: "house.fill"
         case .space: "building.2.fill"
+        case .pc: "desktopcomputer"
         }
     }
 
@@ -56,6 +59,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
         case .object: .orange
         case .room: .blue
         case .space: .purple
+        case .pc: .teal
         }
     }
 
@@ -63,7 +67,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
         switch self {
         case .object: ObjectCaptureSession.isSupported
         case .room: RoomCaptureSession.isSupported
-        case .space: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+        case .space, .pc: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
         }
     }
 
@@ -88,6 +92,12 @@ enum ScanMode: String, Identifiable, CaseIterable {
             Tip(icon: "exclamationmark.triangle.fill", text: "Si el aviso se pone rojo, ve más despacio: así las fotos no salen movidas."),
             Tip(icon: "arrow.triangle.capsulepath", text: "Cubre todo con la malla (hasta ~5 m) y termina cerca de donde empezaste."),
             Tip(icon: "sparkles", text: "Espejos, ventanas y suelos brillantes: la app quita sola lo que aparece reflejado tras las paredes o bajo el suelo, y los brillos de las lámparas no manchan el color."),
+        ]
+        case .pc: [
+            Tip(icon: "desktopcomputer", text: "Abre Pocket3D PC en tu ordenador (doble clic en «Pocket3D PC.bat») y conecta la app con el botón PC. Misma WiFi."),
+            Tip(icon: "square.3.layers.3d", text: "La malla celeste sobre la cámara la calcula tu PC en vivo: lo pintado ya está; donde no hay malla, apunta ahí."),
+            Tip(icon: "tortoise.fill", text: "Camina despacio. La malla llega con uno o dos segundos de retraso: es normal."),
+            Tip(icon: "checkmark.seal.fill", text: "Al guardar, el PC hace la malla final en alta resolución y te la devuelve a «Mis escaneos»."),
         ]
         }
     }
@@ -225,7 +235,7 @@ struct HomeView: View {
 }
 
 /// Conectar con Pocket3D PC: el escaneo de Espacio se ve en vivo en el ordenador y su GPU hace la versión fotorrealista.
-private struct PCSheet: View {
+struct PCSheet: View {
     @ObservedObject private var pc = PCLink.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -402,6 +412,7 @@ private struct ScanContainer: View {
             case .object: ObjectScanView()
             case .room: RoomScanView()
             case .space: SpaceScanView()
+            case .pc: SpaceScanView(pcMode: true)
             }
         }
         .overlay(alignment: .topTrailing) {

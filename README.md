@@ -33,6 +33,8 @@ Con un Apple ID gratuito la firma caduca a los 7 días: vuelve a pulsar *Start* 
 
 Con **Pocket3D PC** abierto en el ordenador (doble clic en `pc/Pocket3D PC.bat`), el modo Espacio le manda por WiFi cada foto, su pose y la malla mientras escaneas: la ves crecer en la pantalla del PC y, al guardar, su GPU crea la versión fotorrealista y la devuelve a la app. Pasos en [PC.md](PC.md#0-en-vivo-el-iphone-le-manda-el-escaneo-al-pc-mientras-escaneas).
 
+**Modo PC**: el iPhone solo captura y tu PC calcula la malla en vivo; la ves sobre la cámara (lo pintado está hecho, lo que no, falta) y al terminar te devuelve la malla final en alta resolución.
+
 ## Abrir en Blender
 
 Todos los modos dan un modelo que Blender (probado con 5.0) abre a escala real y derecho, sin tocar opciones:

@@ -21,6 +21,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+try:   # fusión en vivo (modo PC): opcional, necesita numpy y open3d
+    import fusion as fusion_engine
+except ImportError:
+    fusion_engine = None
+
 PORT = 8765
 SERVICE = "_pocket3d._tcp.local."
 # Solo estos nombres se pueden escribir: nada de rutas con «..» ni archivos fuera de la carpeta del escaneo.
@@ -37,6 +42,8 @@ class Scan:
         (self.dir / "depth").mkdir(exist_ok=True)
         self.frames = []
         self.mesh_version = 0
+        # Malla en vivo calculada aquí con la profundidad LiDAR y las poses que manda el iPhone.
+        self.fusion = fusion_engine.Fusion(self.dir) if fusion_engine else None
         self.state = "recibiendo"   # recibiendo → procesando → listo / falló
         self.log = []
         self.lock = threading.Lock()
@@ -45,18 +52,27 @@ class Scan:
     def result(self) -> Path:
         return self.dir / "resultado.ply"
 
+    @property
+    def final_mesh(self) -> Path:
+        return self.dir / "malla.ply"
+
     def add_frame(self, entry: dict):
         if not isinstance(entry, dict) or not ALLOWED_FILE.match(str(entry.get("file_path", ""))):
             raise ValueError("fotograma sin file_path válido")
         with self.lock:
             self.frames.append(entry)
             self.write_transforms()
+        if self.fusion:
+            self.fusion.add(entry)
 
     def write_transforms(self):
         """transforms.json siempre al día y válido: se puede entrenar aunque el iPhone se desconecte a medias."""
         meta = {"camera_model": "OPENCV", "frames": sorted(self.frames, key=lambda f: f["file_path"])}
-        if (self.dir / "mesh.ply").exists():
-            meta["ply_file_path"] = "mesh.ply"
+        # Nube de partida del splat: la malla del iPhone o, en modo PC, la fusionada aquí.
+        for cloud in ("mesh.ply", "malla.ply"):
+            if (self.dir / cloud).exists():
+                meta["ply_file_path"] = cloud
+                break
         tmp = self.dir / "transforms.json.tmp"
         tmp.write_text(json.dumps(meta, indent=1))
         os.replace(tmp, self.dir / "transforms.json")
@@ -66,6 +82,7 @@ class Scan:
             cameras = [[f["transform_matrix"][r][3] for r in range(3)] for f in self.frames if "transform_matrix" in f]
             return {"id": self.id, "frames": len(self.frames), "mesh": self.mesh_version, "state": self.state,
                     "result": self.result.exists() and self.state == "listo", "cameras": cameras,
+                    "preview": self.fusion.version if self.fusion else 0, "final_mesh": self.final_mesh.exists(),
                     "log": self.log[-6:], "folder": str(self.dir)}
 
 
@@ -89,7 +106,7 @@ class App:
     def finish(self, scan: Scan):
         scan.write_transforms()
         print(f"■ Escaneo terminado: {len(scan.frames)} fotos en {scan.dir}", flush=True)
-        if not self.command:
+        if not self.command and not scan.fusion:
             scan.state = "listo"
             scan.log.append("Dataset listo (sin --al-terminar no se procesa).")
             return
@@ -97,6 +114,19 @@ class App:
         threading.Thread(target=self.process, args=(scan,), daemon=True).start()
 
     def process(self, scan: Scan):
+        if scan.fusion:
+            scan.log.append("Calculando la malla final…")
+            print("⚙ Malla final (TSDF)…", flush=True)
+            try:
+                mesh = scan.fusion.final()
+                scan.log.append("Malla final lista." if mesh else "No salió malla: ¿llegó la profundidad LiDAR?")
+                scan.write_transforms()   # ahora con la malla como nube de partida del splat
+            except Exception as error:   # sin malla final, el dataset sigue sirviendo
+                scan.log.append(f"Malla final: {error}")
+        if not self.command:
+            scan.state = "listo"
+            print("✔ Listo: " + str(scan.final_mesh), flush=True)
+            return
         command = self.command.replace("{datos}", str(scan.dir)).replace("{salida}", str(scan.result))
         print(f"⚙ {command}", flush=True)
         try:
@@ -154,7 +184,7 @@ def make_handler(app: App):
                 scan = self.scan(parts[2])
                 if scan:
                     return self.json(scan.status())
-            if len(parts) == 4 and parts[:2] == ["api", "scan"] and parts[3] in ("mesh.glb", "resultado.ply"):
+            if len(parts) == 4 and parts[:2] == ["api", "scan"] and parts[3] in ("mesh.glb", "resultado.ply", "preview.bin", "fused.glb", "malla.ply"):
                 scan = self.scan(parts[2])
                 path = scan and scan.dir / parts[3]
                 if path and path.exists() and (parts[3] != "resultado.ply" or scan.state == "listo"):
@@ -246,6 +276,7 @@ def main():
         print(f"  En la app (PC → dirección): {ip}")
     print(f"  Mira el escaneo en vivo: http://localhost:{args.puerto}")
     print("  Búsqueda automática: " + ("activada" if zc else "desactivada (pip install zeroconf para activarla)"))
+    print("  Modo PC (malla en vivo): " + ("activado" if fusion_engine else "desactivado (pip install open3d==0.19.0)"))
     print("  Si Windows pregunta por el firewall, permite el acceso en redes privadas.\n", flush=True)
     try:
         server.serve_forever()
@@ -306,9 +337,11 @@ async function poll(){
    cams.geometry.setAttribute("position",new THREE.BufferAttribute(p,3));path.geometry.setAttribute("position",new THREE.BufferAttribute(p,3));
    const card=document.getElementById("resultCard");card.hidden=!s.result;
    if(s.result)document.getElementById("result").href=`/api/scan/${s.id}/resultado.ply`;
-   if(s.mesh!==meshVersion&&s.mesh>0){
-    meshVersion=s.mesh;
-    loader.load(`/api/scan/${s.id}/mesh.glb?v=${s.mesh}`,g=>{
+   // Con fusión en el PC se ve su malla (en color); si no, la que manda el iPhone.
+   const version=s.preview>0?1e6+s.preview:s.mesh, file=s.preview>0?"fused.glb":"mesh.glb";
+   if(version!==meshVersion&&version>0){
+    meshVersion=version;
+    loader.load(`/api/scan/${s.id}/${file}?v=${version}`,g=>{
      if(mesh)scene.remove(mesh);mesh=g.scene;scene.add(mesh);
      if(!framed){const box=new THREE.Box3().setFromObject(mesh),c=box.getCenter(new THREE.Vector3()),r=box.getSize(new THREE.Vector3()).length();
       controls.target.copy(c);camera.position.copy(c).add(new THREE.Vector3(r*.6,r*.6,r*.6));framed=true}

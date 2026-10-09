@@ -31,6 +31,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: swiftc Pocket3D/MeshColor.swift Pocket3D/Reflections.swift Tests/main.swift -o meshcheck && ./meshcheck
       - run: python3 pc/test_pc.py   # Pocket3D PC con un iPhone simulado
+      # Modo PC: fusión TSDF con open3d 0.19 (la 0.20 no integra nada) y el servidor con la fusión activa.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "open3d==0.19.0" numpy pillow && python pc/test_fusion.py && python pc/test_pc.py
 
   splat:
     # Entrena un splat con el núcleo msplat de la app (Metal) y el puente PocketSplat sobre una escena sintética.

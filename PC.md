@@ -16,6 +16,12 @@ En el iPhone, Apple solo permite fotogrametría en calidad reducida y no tiene A
 
 `entrenar_nerfstudio.py` entrena con nerfstudio (sección 3) usando las poses de ARKit tal cual, así el splat sale a escala y derecho. Sirve cualquier otro programa: `{datos}` es la carpeta del escaneo y `{salida}` el `.ply` que vuelve al iPhone. Sin `--al-terminar`, el dataset queda listo en la carpeta para Postshot o RealityScan.
 
+### Modo PC: tu PC calcula, el iPhone captura
+
+En la app, el modo **Modo PC** usa el iPhone solo como sensor (cámara, LiDAR y posición). Tu PC fusiona cada foto con su profundidad en una malla 3D (TSDF, como los escáneres profesionales) y se la devuelve en vivo: la ves **en celeste sobre la cámara**, quieta sobre lo escaneado aunque te muevas. Lo pintado ya está; donde no hay malla, falta. Al guardar, el PC calcula la malla final (1 cm en objetos, 2 cm en espacios grandes) y vuelve a «Mis escaneos» como «Espacio PC malla».
+
+Necesita **Python 3.12** (el motor 3D, open3d 0.19, no existe aún para 3.13) — `Pocket3D PC.bat` lo instala solo. La versión 0.20 de open3d tiene un fallo que deja la malla vacía: por eso va fijada la 0.19.
+
 ## 1. Objeto → malla texturizada de alta calidad: RealityScan (gratis)
 
 1. Descarga **RealityScan** (antes RealityCapture) desde el Epic Games Launcher. Gratis para particulares y empresas con menos de 1 M$ de ingresos.

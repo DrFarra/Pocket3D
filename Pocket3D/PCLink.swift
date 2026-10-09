@@ -138,7 +138,20 @@ final class PCLink: ObservableObject {
         return true
     }
 
+    /// GET de un recurso del PC (nil si no hay PC o falla).
+    func data(_ path: String) async -> Data? {
+        guard let base, let reply = try? await session.data(from: base.appending(path: path)),
+              (reply.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return reply.0
+    }
+
+    func json(_ path: String) async -> [String: Any]? {
+        guard let data = await data(path) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
     private func waitForResult(scan: String, from base: URL) async {
+        var gotMesh = false
         // Entrenar en el PC lleva minutos: se pregunta cada 5 s mientras la app esté abierta (hasta 3 horas).
         for _ in 0..<2160 {
             try? await Task.sleep(for: .seconds(5))
@@ -146,7 +159,15 @@ final class PCLink: ObservableObject {
                   let status = try? JSONSerialization.jsonObject(with: response.0) as? [String: Any],
                   let state = status["state"] as? String else { continue }   // sin red un momento: se reintenta
             remoteState = state
-            if state == "falló" { return }
+            // Modo PC: la malla final llega antes que el splat (si lo hay).
+            if !gotMesh, status["final_mesh"] as? Bool == true,
+               let download = try? await session.download(from: base.appending(path: "api/scan/\(scan)/malla.ply")),
+               (download.1 as? HTTPURLResponse)?.statusCode == 200 {
+                try? FileManager.default.moveItem(at: download.0, to: Scans.newURL("Espacio PC malla", ext: "ply"))
+                gotMesh = true
+                resultsReceived += 1
+            }
+            if state == "falló" || (state == "listo" && status["result"] as? Bool != true) { return }
             if state == "listo", status["result"] as? Bool == true {
                 guard let download = try? await session.download(from: base.appending(path: "api/scan/\(scan)/resultado.ply")),
                       (download.1 as? HTTPURLResponse)?.statusCode == 200 else { continue }
