@@ -65,9 +65,10 @@ enum ScanMode: String, Identifiable, CaseIterable {
     var tips: [Tip] {
         switch self {
         case .object: [
-            Tip(icon: "lightbulb.fill", text: "Pon el objeto sobre una mesa despejada, con luz suave y sin sombras duras."),
-            Tip(icon: "cube.transparent", text: "Ajusta la caja para que envuelva el objeto y pulsa «Empezar captura»."),
-            Tip(icon: "arrow.2.circlepath", text: "Rodéalo despacio. Al completar la vuelta, da otra más alta o más baja, o pulsa «Terminar»."),
+            Tip(icon: "lightbulb.fill", text: "Mesa lisa y despejada, luz suave. Evita sol directo y focos que hagan brillos."),
+            Tip(icon: "scope", text: "Apunta al objeto: la app lo detecta y fija la caja sola en 2 segundos."),
+            Tip(icon: "arrow.2.circlepath", text: "Rodéalo despacio. Al completar la vuelta, toca «Ver cómo va» para ver los huecos y da otra vuelta más alta o más baja."),
+            Tip(icon: "sparkles", text: "Vidrio, espejos o metal muy brillante confunden a cualquier escáner: cúbrelos con spray mate o talco, o usa Postshot en el PC."),
         ]
         case .room: [
             Tip(icon: "lightbulb.fill", text: "Enciende las luces y abre las puertas que quieras incluir."),

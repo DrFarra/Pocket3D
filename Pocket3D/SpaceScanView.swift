@@ -14,18 +14,28 @@ struct SpaceScanView: View {
         ARViewRepresentable(arView: model.arView)
             .ignoresSafeArea()
             .overlay(alignment: .top) {
-                Text(model.tooFast ? "Más despacio: las fotos salen movidas" : "Recorre la estructura despacio · \(model.keyframes) fotos")
-                    .font(.callout).foregroundStyle(.white)
-                    .padding(10).background(model.tooFast ? .red.opacity(0.7) : .black.opacity(0.5), in: Capsule())
+                Group {
+                    if let warning = model.warning {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.headline).foregroundStyle(.black)
+                            .background(.yellow, in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
+                    } else {
+                        Text("Recorre todo despacio. La malla marca lo ya escaneado · \(model.keyframes) fotos")
+                            .font(.callout).foregroundStyle(.white)
+                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
+                    }
+                }
+                .multilineTextAlignment(.center).padding(.horizontal, 30)
+                .animation(.spring, value: model.warning)
                     .padding(.top, 70)
             }
             .sensoryFeedback(.impact(weight: .light), trigger: model.keyframes)
-            .sensoryFeedback(trigger: model.tooFast) { _, fast in fast ? .warning : nil }
+            .sensoryFeedback(.warning, trigger: model.warning) { _, new in new != nil }
             .scanChrome(confirmClose: model.keyframes > 0) {
                 if saving {
                     ProgressView("Guardando…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                 } else {
-                    Button("Guardar") {
+                    Button(model.keyframes < SpaceScanModel.minimumKeyframes ? "Faltan \(SpaceScanModel.minimumKeyframes - model.keyframes) fotos" : "Guardar") {
                         saving = true
                         Task {
                             do {
@@ -37,6 +47,7 @@ struct SpaceScanView: View {
                             saving = false
                         }
                     }
+                    .disabled(model.keyframes < SpaceScanModel.minimumKeyframes)
                 }
             }
             .onAppear { model.start() }
@@ -52,6 +63,9 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     let arView = ARView(frame: .zero)
     @Published var keyframes = 0
     @Published var tooFast = false
+    /// Lo que impide un buen escaneo ahora mismo (velocidad, luz, tracking), en lenguaje claro.
+    @Published var warning: String?
+    static let minimumKeyframes = 8
 
     private let work = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     private var frames: [[String: Any]] = []
@@ -95,8 +109,23 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             let fast = speed > 0.6 || turnRate > .pi / 2   // > 0,6 m/s o > 90°/s
             if fast != tooFast { tooFast = fast }
         }
+        let warning = Self.warning(for: frame, tooFast: tooFast)
+        if warning != self.warning { self.warning = warning }
         previous = (pose, frame.timestamp)
         considerKeyframe(frame)
+    }
+
+    private static func warning(for frame: ARFrame, tooFast: Bool) -> String? {
+        switch frame.camera.trackingState {
+        case .limited(.excessiveMotion): return "Más despacio"
+        case .limited(.insufficientFeatures): return "Apunta a zonas con más detalle"
+        case .limited(.initializing), .limited(.relocalizing): return "Mueve el iPhone despacio para empezar"
+        case .notAvailable: return "Esperando a la cámara…"
+        default: break
+        }
+        if tooFast { return "Más despacio: las fotos salen movidas" }
+        if let light = frame.lightEstimate?.ambientIntensity, light < 250 { return "Poca luz: enciende las luces" }
+        return nil
     }
 
     /// Nueva foto cada 10 cm o ~10° de giro, solo con tracking bueno, sin ir rápido y de una en una.
