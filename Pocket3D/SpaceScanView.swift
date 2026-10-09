@@ -5,7 +5,8 @@ import SwiftUI
 /// Reconstrucción LiDAR de ARKit (malla PLY coloreada con las fotos) + dataset de fotos con pose y profundidad
 /// para entrenar Gaussian splats o hacer fotogrametría en el PC.
 struct SpaceScanView: View {
-    @StateObject private var model = SpaceScanModel()
+    @StateObject private var model: SpaceScanModel
+    @State private var showingPC = false
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
     @State private var saving = false
@@ -13,7 +14,28 @@ struct SpaceScanView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var pc = PCLink.shared
 
+    /// `pcMode`: el iPhone solo captura (cámara, LiDAR, posición) y la malla la calcula tu PC en vivo.
+    init(pcMode: Bool = false) {
+        _model = StateObject(wrappedValue: SpaceScanModel(pcMode: pcMode))
+    }
+
     var body: some View {
+        if model.pcMode && !pc.isConnected {
+            ContentUnavailableView {
+                Label("Conecta tu PC", systemImage: "desktopcomputer")
+            } description: {
+                Text("En el modo PC tu ordenador hace los cálculos. Abre Pocket3D PC en él y conéctalo (misma WiFi).")
+            } actions: {
+                Button("Conectar mi PC") { showingPC = true }.buttonStyle(.borderedProminent)
+            }
+            .scanChrome {}
+            .sheet(isPresented: $showingPC) { PCSheet() }
+        } else {
+            scanner
+        }
+    }
+
+    private var scanner: some View {
         Group {
             // Mientras se entrena el splat, fuera la vista AR: RealityKit seguiría dibujando y quitándole GPU.
             if model.splatProgress == nil { ARViewRepresentable(arView: model.arView) } else { Color.black }
@@ -28,7 +50,8 @@ struct SpaceScanView: View {
                     } else {
                         Text((model.keyframes >= SpaceScanModel.maximumKeyframes
                              ? "Ya hay fotos de sobra: puedes guardar"
-                             : model.guidance ?? "Recorre todo despacio. La malla marca lo ya escaneado")
+                             : model.guidance ?? (model.pcMode ? "Lo celeste ya lo calculó tu PC: apunta a lo que falta"
+                                                               : "Recorre todo despacio. La malla marca lo ya escaneado"))
                              + (model.pcScan != nil ? "\nEn vivo en \(pc.name ?? "el PC")" : ""))
                             .font(.callout).foregroundStyle(.white)
                             .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
@@ -58,7 +81,9 @@ struct SpaceScanView: View {
                             // Con el PC procesándolo, no hace falta esperar al iPhone: su GPU lo hace mejor y más rápido.
                             if await model.finishOnPC() {
                                 dismissAfterAlert = true
-                                self.error = "Guardado. Tu PC está creando la versión fotorrealista: aparecerá en «Mis escaneos» al terminar (deja la app abierta)."
+                                self.error = model.pcMode
+                                    ? "Guardado. Tu PC está terminando la malla final: aparecerá en «Mis escaneos» (deja la app abierta)."
+                                    : "Guardado. Tu PC está creando la versión fotorrealista: aparecerá en «Mis escaneos» al terminar (deja la app abierta)."
                                 saving = false
                                 return
                             }
@@ -125,6 +150,17 @@ private final class CancelFlag: @unchecked Sendable {
 @MainActor
 final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     let arView = ARView(frame: .zero)
+    let pcMode: Bool
+    /// Modo PC: la malla que va calculando tu PC, dibujada en el mismo mundo de ARKit (por eso se queda quieta
+    /// sobre lo escaneado aunque muevas el iPhone: las poses que recibe el PC son las de esta sesión).
+    private let pcMeshAnchor = AnchorEntity(world: .zero)
+    private let pcMesh = ModelEntity()
+    private var pcMeshTask: Task<Void, Never>?
+
+    init(pcMode: Bool = false) {
+        self.pcMode = pcMode
+        super.init()
+    }
     @Published var keyframes = 0
     @Published var tooFast = false
     /// Lo que impide un buen escaneo ahora mismo (velocidad, luz, tracking), en lenguaje claro.
@@ -163,18 +199,74 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     func start() {
         try? FileManager.default.createDirectory(at: work.appending(path: "images"), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: work.appending(path: "depth"), withIntermediateDirectories: true)
-        config.sceneReconstruction = .mesh
+        config.sceneReconstruction = pcMode ? [] : .mesh   // en modo PC la malla la calcula el ordenador
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { config.frameSemantics.insert(.sceneDepth) }
         if let format = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
             config.videoFormat = format
         }
-        arView.debugOptions.insert(.showSceneUnderstanding)
+        if pcMode {
+            pcMeshAnchor.addChild(pcMesh)
+            arView.scene.addAnchor(pcMeshAnchor)
+        } else {
+            arView.debugOptions.insert(.showSceneUnderstanding)
+        }
         arView.session.delegate = self
         arView.session.run(config)
-        Task { pcScan = await PCLink.shared.beginScan() }
+        Task {
+            pcScan = await PCLink.shared.beginScan()
+            if pcMode { followPCMesh() }
+        }
+    }
+
+    /// Cada segundo: si el PC tiene malla nueva, se descarga y sustituye a la anterior.
+    private func followPCMesh() {
+        pcMeshTask = Task { [weak self] in
+            var shown = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let scan = self?.pcScan,
+                      let status = await PCLink.shared.json("api/scan/\(scan)/status"),
+                      let version = status["preview"] as? Int, version != shown,
+                      let data = await PCLink.shared.data("api/scan/\(scan)/preview.bin"),
+                      let descriptor = await Task.detached(operation: { Self.meshDescriptor(fromPreview: data) }).value,
+                      let resource = try? MeshResource.generate(from: [descriptor]) else { continue }
+                shown = version
+                var material = UnlitMaterial(color: UIColor.systemTeal.withAlphaComponent(0.45))
+                material.blending = .transparent(opacity: 0.45)
+                self?.pcMesh.model = ModelComponent(mesh: resource, materials: [material])
+            }
+        }
+    }
+
+    /// preview.bin de Pocket3D PC: nº de vértices y de índices (uint32), posiciones (float32 ×3) e índices (uint32).
+    /// Viene de la red: se valida el tamaño y que ningún índice se salga.
+    nonisolated static func meshDescriptor(fromPreview data: Data) -> MeshDescriptor? {
+        guard data.count >= 8 else { return nil }
+        let (vertexCount, indexCount) = data.withUnsafeBytes {
+            (Int($0.loadUnaligned(as: UInt32.self)), Int($0.loadUnaligned(fromByteOffset: 4, as: UInt32.self)))
+        }
+        guard vertexCount > 0, indexCount > 0, indexCount % 3 == 0, data.count == 8 + vertexCount * 12 + indexCount * 4 else { return nil }
+        var positions = [SIMD3<Float>](), indices = [UInt32]()
+        positions.reserveCapacity(vertexCount)
+        indices.reserveCapacity(indexCount)
+        data.withUnsafeBytes { raw in
+            for i in 0..<vertexCount {
+                let o = 8 + i * 12
+                positions.append(SIMD3(raw.loadUnaligned(fromByteOffset: o, as: Float.self), raw.loadUnaligned(fromByteOffset: o + 4, as: Float.self),
+                                       raw.loadUnaligned(fromByteOffset: o + 8, as: Float.self)))
+            }
+            let start = 8 + vertexCount * 12
+            for i in 0..<indexCount { indices.append(raw.loadUnaligned(fromByteOffset: start + i * 4, as: UInt32.self)) }
+        }
+        guard indices.allSatisfy({ Int($0) < vertexCount }) else { return nil }
+        var descriptor = MeshDescriptor(name: "pc")
+        descriptor.positions = MeshBuffer(positions)
+        descriptor.primitives = .triangles(indices)
+        return descriptor
     }
 
     func stop() {
+        pcMeshTask?.cancel()
         arView.session.pause()
         try? FileManager.default.removeItem(at: work)
     }
