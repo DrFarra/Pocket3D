@@ -87,6 +87,18 @@ check(String(decoding: pruned.prefix(80), as: UTF8.self).contains("element verte
 let lost = splatPLY([[9, 9, 9], [8, 8, 8], [0, 0, 0]])
 check((try? MeshColor.pruneSplat(at: lost, near: surface, cell: 0.15)) == 0, "si quitaría más de la mitad, no toca nada")
 
+// Nitidez: un tablero de ajedrez nítido supera al mismo tablero desenfocado.
+func board(blur: Bool) -> [UInt8] {
+    var out = [UInt8]()
+    for y in 0..<64 { for x in 0..<64 {
+        let v: UInt8 = blur ? UInt8(128 + 60 * sin(Float(x) * .pi / 8)) : ((x / 8 + y / 8) % 2 == 0 ? 255 : 0)
+        out += [v, v, v, 255]
+    } }
+    return out
+}
+check(MeshColor.sharpness(rgba: board(blur: false), width: 64, height: 64) > 10 * MeshColor.sharpness(rgba: board(blur: true), width: 64, height: 64),
+      "una foto nítida mide más nitidez que una movida")
+
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
 let colors: [SIMD3<UInt8>] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]

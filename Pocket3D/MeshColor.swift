@@ -58,6 +58,25 @@ enum MeshColor {
         return SIMD3(UInt8(min(255, mean.x.rounded())), UInt8(min(255, mean.y.rounded())), UInt8(min(255, mean.z.rounded())))
     }
 
+    /// Nitidez de una foto: varianza del laplaciano sobre el gris. Las fotos movidas dan valores bajos.
+    static func sharpness(rgba: [UInt8], width: Int, height: Int) -> Float {
+        guard width > 2, height > 2, rgba.count >= width * height * 4 else { return 0 }
+        func gray(_ x: Int, _ y: Int) -> Float {
+            let i = (y * width + x) * 4
+            return 0.299 * Float(rgba[i]) + 0.587 * Float(rgba[i + 1]) + 0.114 * Float(rgba[i + 2])
+        }
+        var sum: Float = 0, squares: Float = 0
+        for y in 1..<height - 1 {
+            for x in 1..<width - 1 {
+                let l = gray(x - 1, y) + gray(x + 1, y) + gray(x, y - 1) + gray(x, y + 1) - 4 * gray(x, y)
+                sum += l
+                squares += l * l
+            }
+        }
+        let n = Float((width - 2) * (height - 2))
+        return squares / n - (sum / n) * (sum / n)
+    }
+
     static let unseen = SIMD3<UInt8>(160, 160, 160)
 
     /// Colorea todos los vértices repartiendo el trabajo entre los núcleos. Con `indices` (triángulos), los que
