@@ -115,7 +115,8 @@ enum MeshColor {
     /// GLB (glTF binario) con color por vértice para Blender: entra derecho (Z arriba, en metros) y con el color ya
     /// conectado al material, sin necesitar luces. Probado con Blender 5.0: el PLY entra tumbado (asume Z arriba) y el
     /// OBJ sin material.
-    static func glbData(positions: [SIMD3<Float>], colors: [SIMD3<UInt8>], indices: [UInt32]) throws -> Data {
+    /// `unlit`: el color ya trae la luz real (escaneo con fotos); sin él, Blender lo sombrea (cajas de un plano).
+    static func glbData(positions: [SIMD3<Float>], colors: [SIMD3<UInt8>], indices: [UInt32], unlit: Bool = true) throws -> Data {
         precondition(!positions.isEmpty && positions.count == colors.count && indices.count % 3 == 0)
         var bin = Data()
         bin.reserveCapacity(positions.count * 16 + indices.count * 4)
@@ -128,14 +129,14 @@ enum MeshColor {
         for i in indices { withUnsafeBytes(of: i.littleEndian) { bin.append(contentsOf: $0) } }
         let low = positions.reduce(positions[0]) { simd_min($0, $1) }, high = positions.reduce(positions[0]) { simd_max($0, $1) }
 
-        let json: [String: Any] = [
+        var material: [String: Any] = ["doubleSided": true,
+                                       "pbrMetallicRoughness": ["baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 1]]
+        if unlit { material["extensions"] = ["KHR_materials_unlit": [String: Any]()] }
+        var json: [String: Any] = [
             "asset": ["version": "2.0", "generator": "Pocket3D"],
             "scene": 0, "scenes": [["nodes": [0]]], "nodes": [["mesh": 0, "name": "Pocket3D"]],
             "meshes": [["primitives": [["attributes": ["POSITION": 0, "COLOR_0": 1], "indices": 2, "material": 0]]]],
-            // Sin iluminar: el color ya trae la luz real de las fotos; con luces de Blender una habitación cerrada sale negra.
-            "extensionsUsed": ["KHR_materials_unlit"],
-            "materials": [["doubleSided": true, "extensions": ["KHR_materials_unlit": [String: Any]()],
-                           "pbrMetallicRoughness": ["baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 1]]],
+            "materials": [material],
             "buffers": [["byteLength": bin.count]],
             "bufferViews": [["buffer": 0, "byteOffset": 0, "byteLength": colorOffset, "target": 34962],
                             ["buffer": 0, "byteOffset": colorOffset, "byteLength": indexOffset - colorOffset, "target": 34962],
@@ -145,6 +146,8 @@ enum MeshColor {
                           ["bufferView": 1, "componentType": 5121, "normalized": true, "count": colors.count, "type": "VEC4"],
                           ["bufferView": 2, "componentType": 5125, "count": indices.count, "type": "SCALAR"]],
         ]
+        // Sin iluminar: el color ya trae la luz real de las fotos; con luces de Blender una habitación cerrada sale negra.
+        if unlit { json["extensionsUsed"] = ["KHR_materials_unlit"] }
         var header = try JSONSerialization.data(withJSONObject: json)
         header.append(contentsOf: repeatElement(0x20, count: (4 - header.count % 4) % 4))  // los bloques miden múltiplos de 4
         bin.append(contentsOf: repeatElement(0, count: (4 - bin.count % 4) % 4))
@@ -155,6 +158,25 @@ enum MeshColor {
         word(header.count); word(0x4E4F_534A); glb.append(header)                 // bloque "JSON"
         word(bin.count); word(0x004E_4942); glb.append(bin)                       // bloque "BIN"
         return glb
+    }
+
+    /// Cajas de color (paredes, puertas, muebles de RoomPlan) como una sola malla, centradas en `transform`.
+    static func boxes(_ items: [(transform: simd_float4x4, size: SIMD3<Float>, color: SIMD3<UInt8>)])
+        -> (positions: [SIMD3<Float>], colors: [SIMD3<UInt8>], indices: [UInt32]) {
+        // Esquina i: bit 0 = +x, bit 1 = +y, bit 2 = +z. Seis caras de dos triángulos.
+        let faces: [UInt32] = [0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3, 0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6, 0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5]
+        var positions = [SIMD3<Float>](), colors = [SIMD3<UInt8>](), indices = [UInt32]()
+        for item in items {
+            let base = UInt32(positions.count)
+            for i in 0..<8 {
+                let sign = SIMD3<Float>(i & 1 == 0 ? -0.5 : 0.5, i & 2 == 0 ? -0.5 : 0.5, i & 4 == 0 ? -0.5 : 0.5)
+                let p = item.transform * SIMD4(sign * item.size, 1)
+                positions.append(SIMD3(p.x, p.y, p.z))
+                colors.append(item.color)
+            }
+            indices += faces.map { $0 + base }
+        }
+        return (positions, colors, indices)
     }
 
     /// Los PLY de Gaussian splats llevan coeficientes de color esférico (f_dc_*); los de malla no.
