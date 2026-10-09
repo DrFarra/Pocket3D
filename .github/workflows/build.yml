@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: swiftc Pocket3D/MeshColor.swift Tests/main.swift -o meshcheck && ./meshcheck
+      - run: swiftc Pocket3D/MeshColor.swift Pocket3D/Reflections.swift Tests/main.swift -o meshcheck && ./meshcheck
       - run: python3 pc/test_pc.py   # Pocket3D PC con un iPhone simulado
 
   splat:

@@ -14,13 +14,20 @@ struct ColorView {
 }
 
 enum MeshColor {
-    /// Promedio ponderado de las `blend` mejores vistas que ven el punto sin nada delante (según la profundidad LiDAR).
-    /// Mejor = más de frente y más cerca: las fotos de canto o lejanas estiran y emborronan el color. Con una sola foto
-    /// la malla salía moteada (ruido del sensor y exposición distinta entre fotos).
-    static func color(of point: SIMD3<Float>, normal: SIMD3<Float>? = nil, in views: [ColorView], blend: Int = 4) -> SIMD3<UInt8>? {
-        var best: [(score: Float, color: SIMD3<Float>)] = []
-        best.reserveCapacity(blend + 1)
-        for view in views.reversed() {
+    /// Una observación de un punto: su color en una foto y cuánto se fía uno de ella.
+    struct Sample {
+        var score: Float
+        var color: SIMD3<Float>
+        var view: Int
+    }
+
+    /// Las `limit` mejores fotos que ven el punto sin nada delante (según la profundidad LiDAR).
+    /// Mejor = más de frente y más cerca: las fotos de canto o lejanas estiran y emborronan el color.
+    static func samples(of point: SIMD3<Float>, normal: SIMD3<Float>? = nil, in views: [ColorView], limit: Int = 8) -> [Sample] {
+        var best = [Sample]()
+        best.reserveCapacity(limit + 1)
+        for index in views.indices.reversed() {
+            let view = views[index]
             // Convención ARKit/OpenGL: la cámara mira a -Z, Y hacia arriba; la imagen tiene Y hacia abajo.
             let c = view.worldToCamera * SIMD4(point, 1)
             let z = -c.z
@@ -46,16 +53,64 @@ enum MeshColor {
             }
             let score = facing / z
             // Ante empate gana la más reciente (se recorren de la última a la primera).
-            guard best.count < blend || score > best[blend - 1].score else { continue }
+            guard best.count < limit || score > best[limit - 1].score else { continue }
             let i = (Int(v) * view.width + Int(u)) * 4
-            best.append((score, SIMD3(Float(view.rgba[i]), Float(view.rgba[i + 1]), Float(view.rgba[i + 2]))))
+            best.append(Sample(score: score, color: SIMD3(Float(view.rgba[i]), Float(view.rgba[i + 1]), Float(view.rgba[i + 2])),
+                               view: index))
             best.sort { $0.score > $1.score }
-            if best.count > blend { best.removeLast() }
+            if best.count > limit { best.removeLast() }
         }
-        guard !best.isEmpty else { return nil }
-        let total = best.reduce(0) { $0 + $1.score }
-        let mean = best.reduce(SIMD3<Float>.zero) { $0 + $1.color * $1.score } / total
+        return best
+    }
+
+    static func luminance(_ c: SIMD3<Float>) -> Float { 0.299 * c.x + 0.587 * c.y + 0.114 * c.z }
+
+    /// Color de un punto a partir de sus observaciones, sin que lo engañen las luces:
+    /// - `gains`: cada foto corregida por su exposición (el iPhone oscurece al apuntar a una ventana o una lámpara).
+    /// - Píxeles quemados (≥ 250) fuera: no dicen nada del color real.
+    /// - Brillos (reflejo de una lámpara en algo pulido): la luz reflejada solo suma y cambia con el ángulo, así que una
+    ///   foto mucho más clara que la mediana del punto es un brillo y se descarta. El color de verdad es el de abajo.
+    static func fuse(_ samples: [Sample], gains: [Float]? = nil, robust: Bool = true) -> SIMD3<UInt8>? {
+        guard !samples.isEmpty else { return nil }
+        var kept = samples
+        if robust {
+            let unclipped = kept.filter { max($0.color.x, $0.color.y, $0.color.z) < 250 }
+            if !unclipped.isEmpty { kept = unclipped }
+        }
+        if let gains { kept = kept.map { var s = $0; s.color = simd_min(s.color * gains[s.view], SIMD3(repeating: 255)); return s } }
+        if robust, kept.count > 1 {
+            let lums = kept.map { luminance($0.color) }.sorted()
+            let reference = lums[(lums.count - 1) / 2]
+            let limit = max(reference * 1.3, reference + 25)
+            kept = kept.filter { luminance($0.color) <= limit }
+        }
+        let total = kept.reduce(0) { $0 + $1.score }
+        let mean = kept.reduce(SIMD3<Float>.zero) { $0 + $1.color * $1.score } / total
         return SIMD3(UInt8(min(255, mean.x.rounded())), UInt8(min(255, mean.y.rounded())), UInt8(min(255, mean.z.rounded())))
+    }
+
+    static func color(of point: SIMD3<Float>, normal: SIMD3<Float>? = nil, in views: [ColorView], blend: Int = 8) -> SIMD3<UInt8>? {
+        fuse(samples(of: point, normal: normal, in: views, limit: blend))
+    }
+
+    /// Exposición de cada foto respecto a la media: mediana de (color medio del punto ÷ color en esa foto) en los puntos
+    /// que ve. Entre 0,5 y 2; con pocos puntos, 1.
+    static func exposureGains(_ samples: [[Sample]], reference: [SIMD3<UInt8>?], views: Int) -> [Float] {
+        var ratios = [[Float]](repeating: [], count: views)
+        for (i, list) in samples.enumerated() where i % 3 == 0 {   // un tercio de los puntos sobra para estimarlo
+            guard let r = reference[i] else { continue }
+            let target = luminance(SIMD3(Float(r.x), Float(r.y), Float(r.z)))
+            guard target > 20 else { continue }
+            for s in list where max(s.color.x, s.color.y, s.color.z) < 250 {
+                let observed = luminance(s.color)
+                if observed > 20 { ratios[s.view].append(target / observed) }
+            }
+        }
+        return ratios.map { list in
+            guard list.count >= 30 else { return 1 }
+            let sorted = list.sorted()
+            return min(2, max(0.5, sorted[sorted.count / 2]))
+        }
     }
 
     /// Nitidez de una foto: varianza del laplaciano sobre el gris. Las fotos movidas dan valores bajos.
@@ -79,18 +134,32 @@ enum MeshColor {
 
     static let unseen = SIMD3<UInt8>(160, 160, 160)
 
-    /// Colorea todos los vértices repartiendo el trabajo entre los núcleos. Con `indices` (triángulos), los que
-    /// ninguna foto vio limpio toman el color de sus vecinos; si no queda ninguno cerca, gris.
+    /// Colorea todos los vértices repartiendo el trabajo entre los núcleos, en dos pasadas: la primera estima la
+    /// exposición de cada foto; la segunda funde ya corregido y sin brillos. Con `indices` (triángulos), los que ninguna
+    /// foto vio limpio toman el color de sus vecinos; si no queda ninguno cerca, gris.
     static func colors(of positions: [SIMD3<Float>], in views: [ColorView], indices: [UInt32] = []) -> [SIMD3<UInt8>] {
-        var colors = [SIMD3<UInt8>?](repeating: nil, count: positions.count)
         let normals = indices.isEmpty ? nil : normals(of: positions, indices: indices)
-        let chunk = 4096
-        colors.withUnsafeMutableBufferPointer { buffer in
-            let out = buffer  // copia del puntero: cada hilo escribe índices distintos
-            DispatchQueue.concurrentPerform(iterations: (positions.count + chunk - 1) / chunk) { c in
-                for i in c * chunk..<min(positions.count, (c + 1) * chunk) {
-                    out[i] = color(of: positions[i], normal: normals?[i], in: views)
+        var observed = [[Sample]](repeating: [], count: positions.count)
+        var plain = [SIMD3<UInt8>?](repeating: nil, count: positions.count)
+        let chunk = 4096, chunks = (positions.count + chunk - 1) / chunk
+        observed.withUnsafeMutableBufferPointer { samplesBuffer in
+            plain.withUnsafeMutableBufferPointer { plainBuffer in
+                let (samplesOut, plainOut) = (samplesBuffer, plainBuffer)  // copias del puntero: cada hilo escribe índices distintos
+                DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                    for i in c * chunk..<min(positions.count, (c + 1) * chunk) {
+                        samplesOut[i] = samples(of: positions[i], normal: normals?[i], in: views)
+                        plainOut[i] = fuse(samplesOut[i], robust: false)
+                    }
                 }
+            }
+        }
+        let gains = exposureGains(observed, reference: plain, views: views.count)
+        let fused = observed
+        var colors = [SIMD3<UInt8>?](repeating: nil, count: positions.count)
+        colors.withUnsafeMutableBufferPointer { buffer in
+            let out = buffer
+            DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                for i in c * chunk..<min(positions.count, (c + 1) * chunk) { out[i] = fuse(fused[i], gains: gains) }
             }
         }
         fillGaps(&colors, indices: indices)

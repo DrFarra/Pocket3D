@@ -308,7 +308,10 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
 
         // shortcut: colorear recorre vértices × vistas en CPU (en paralelo); pasar a Metal si se queda corto.
         surfaceCells = try await Task.detached {
-            let (positions, indices) = MeshColor.clean(positions: rawPositions, indices: rawIndices)
+            let welded = MeshColor.clean(positions: rawPositions, indices: rawIndices)
+            // Reflejos de espejos, vidrios y suelos brillantes: fuera lo que quede tras las paredes o bajo el suelo.
+            let cameras = views.map { view in let c = view.worldToCamera.inverse.columns.3; return SIMD3(c.x, c.y, c.z) }
+            let (positions, indices, _) = Reflections.removePhantoms(positions: welded.positions, indices: welded.indices, cameras: cameras)
             let colors = MeshColor.colors(of: positions, in: views, indices: indices)
             if !positions.isEmpty {
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
