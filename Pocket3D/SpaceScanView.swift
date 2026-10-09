@@ -131,6 +131,8 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     private var lastPose: simd_float4x4?
     private var capturing = false
     private var colorViews: [ColorView] = []
+    private var recentSharpness: [Float] = []
+    private var blurryRejected = 0
     /// Dónde hay superficie real (celdas de 15 cm): lo que el splat ponga lejos de ahí es basura flotante.
     private var surfaceCells = Set<SIMD3<Int32>>()
     nonisolated static let surfaceCell: Float = 0.15
@@ -199,9 +201,22 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             let forward = simd_dot(simd_normalize(last.columns.2), simd_normalize(pose.columns.2))
             guard moved > 0.10 || forward < cos(Float.pi / 18) else { return }
         }
+        let view = Dataset.colorView(from: frame, width: 192)
+        if let view {
+            // Temblor de mano: la foto sale corrida aunque el iPhone no vaya rápido. Se compara con las últimas
+            // aceptadas (la nitidez depende de la escena) y se espera al siguiente fotograma.
+            let sharpness = MeshColor.sharpness(rgba: view.rgba, width: view.width, height: view.height)
+            let recent = recentSharpness.sorted()
+            if recent.count >= 5, sharpness < 0.5 * recent[recent.count / 2] {
+                blurryRejected += 1
+                if blurryRejected < 30 { return }   // si la escena es lisa de verdad, no bloquear el escaneo
+            }
+            blurryRejected = 0
+            recentSharpness = Array((recentSharpness + [sharpness]).suffix(15))
+        }
         capturing = true
         lastPose = pose
-        if let view = Dataset.colorView(from: frame, width: 192) { colorViews.append(view) }
+        if let view { colorViews.append(view) }
         let index = frames.count
         let work = self.work
         arView.session.captureHighResolutionFrame { [weak self] frame, _ in
