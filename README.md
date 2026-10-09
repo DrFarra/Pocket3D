@@ -5,7 +5,7 @@ Escáner 3D para iPhone con LiDAR (pensado para el 17 Pro Max) + procesado de m�
 | Modo | En el iPhone (al instante) | Para el PC (calidad máxima) |
 |------|----------------------------|-----------------------------|
 | **Objeto** | Modelo USDZ texturizado (Object Capture) | `… Objeto fotos.zip`: las fotos JPEG a resolución completa → RealityScan / Postshot |
-| **Habitación** | Plano 3D con medidas (RoomPlan, USDZ) | — |
+| **Habitación** | Plano 3D con medidas (RoomPlan, USDZ). Pulsa *Otra habitación* para seguir y unirlas todas en un solo plano de la casa | — |
 | **Espacio / estructura** | Malla LiDAR a escala real **en color** (PLY, coloreada con las fotos) | `… Espacio dataset.zip`: fotos de alta resolución + pose de ARKit + profundidad LiDAR + nube de color inicial (formato nerfstudio) → Gaussian splats |
 
 ## Ver tus escaneos en el iPhone
