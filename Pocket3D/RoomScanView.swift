@@ -50,6 +50,24 @@ struct RoomScanView: View {
 
     @State private var savedSeparately = false
 
+    /// Un mueble a más de 30 cm al otro lado de una pared, mirado desde el centro de la habitación y dentro del ancho y
+    /// alto de esa pared, no puede estar ahí: es un reflejo en un espejo o algo visto por una ventana.
+    static func behindWall(_ transform: simd_float4x4, walls: [CapturedRoom.Surface]) -> Bool {
+        guard !walls.isEmpty else { return false }
+        func position(_ m: simd_float4x4) -> SIMD3<Float> { SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z) }
+        let center = walls.reduce(SIMD3<Float>.zero) { $0 + position($1.transform) } / Float(walls.count)
+        let p = position(transform)
+        return walls.contains { wall in
+            let m = wall.transform, origin = position(m)
+            let axis = { (c: SIMD4<Float>) in simd_normalize(SIMD3(c.x, c.y, c.z)) }
+            let normal = axis(m.columns.2)
+            let inside: Float = simd_dot(normal, center - origin) >= 0 ? 1 : -1
+            guard -inside * simd_dot(normal, p - origin) > 0.3 else { return false }
+            return abs(simd_dot(axis(m.columns.0), p - origin)) < wall.dimensions.x / 2
+                && abs(simd_dot(axis(m.columns.1), p - origin)) < wall.dimensions.y / 2
+        }
+    }
+
     /// Extra para Blender (si falla, el USDZ ya está guardado): el mismo GLB que el modo Espacio, con cada elemento
     /// como una caja de color.
     private static func writeBlender(walls: [CapturedRoom.Surface], doors: [CapturedRoom.Surface], windows: [CapturedRoom.Surface],
@@ -62,8 +80,8 @@ struct RoomScanView: View {
         let items = boxes(walls, depth: 0.04, color: [225, 222, 215]) + boxes(floors, depth: 0.04, color: [170, 150, 125])
             + boxes(doors, depth: 0.08, color: [140, 95, 55]) + boxes(windows, depth: 0.08, color: [150, 200, 235])
             + boxes(openings, depth: 0.08, color: [70, 70, 70])
-            // Los muebles de confianza baja suelen ser fantasmas (reflejos, sombras): fuera.
-            + objects.filter { $0.confidence != .low }
+            // Fuera los fantasmas: confianza baja (sombras) o detrás de una pared (vistos en un espejo o por una ventana).
+            + objects.filter { $0.confidence != .low && !behindWall($0.transform, walls: walls) }
                 .map { ($0.transform, simd_max($0.dimensions, SIMD3(repeating: 0.02)), SIMD3<UInt8>(110, 135, 190)) }
         guard !items.isEmpty else { return }
         let mesh = MeshColor.boxes(items)

@@ -73,8 +73,8 @@ enum ScanMode: String, Identifiable, CaseIterable {
         switch self {
         case .object: [
             Tip(icon: "lightbulb.fill", text: "Mesa lisa y despejada, luz suave. Evita sol directo y focos que hagan brillos."),
-            Tip(icon: "scope", text: "Apunta al objeto: la app lo detecta y fija la caja sola en 2 segundos."),
-            Tip(icon: "arrow.2.circlepath", text: "Rodéalo despacio. Al completar la vuelta, toca «Ver cómo va» para ver los huecos y da otra vuelta más alta o más baja."),
+            Tip(icon: "scope", text: "Pon el punto blanco sobre el objeto y, cuando la caja lo rodee entero, toca «Fijar caja»."),
+            Tip(icon: "arrow.2.circlepath", text: "Rodéalo despacio dos veces, una más alta y otra más baja. «Ver» enseña los huecos; «Dándole la vuelta» fotografía la base."),
             Tip(icon: "sparkles", text: "Vidrio, espejos o metal muy brillante confunden a cualquier escáner: cúbrelos con spray mate o talco, o usa Postshot en el PC."),
         ]
         case .room: [
@@ -86,6 +86,7 @@ enum ScanMode: String, Identifiable, CaseIterable {
             Tip(icon: "tortoise.fill", text: "Camina despacio: la app guarda una foto cada 10 cm y vibra suavemente con cada una."),
             Tip(icon: "exclamationmark.triangle.fill", text: "Si el aviso se pone rojo, ve más despacio: así las fotos no salen movidas."),
             Tip(icon: "arrow.triangle.capsulepath", text: "Cubre todo con la malla (hasta ~5 m) y termina cerca de donde empezaste."),
+            Tip(icon: "sparkles", text: "Espejos, ventanas y suelos brillantes: la app quita sola lo que aparece reflejado tras las paredes o bajo el suelo, y los brillos de las lámparas no manchan el color."),
         ]
         }
     }

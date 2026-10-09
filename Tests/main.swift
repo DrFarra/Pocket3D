@@ -1,5 +1,5 @@
 // Pruebas de MeshColor.swift en macOS (mismos ModelIO/SceneKit que iOS):
-//   swiftc Pocket3D/MeshColor.swift Tests/main.swift -o meshcheck && ./meshcheck
+//   swiftc Pocket3D/MeshColor.swift Pocket3D/Reflections.swift Tests/main.swift -o meshcheck && ./meshcheck
 import Foundation
 import ModelIO
 import SceneKit
@@ -26,12 +26,25 @@ check(MeshColor.color(of: [0, 0, -3], in: [split]) == nil, "punto tapado por la 
 check(MeshColor.color(of: [0, 0, 2], in: [split]) == nil, "punto detrás de la cámara no se colorea")
 check(MeshColor.color(of: [5, 0, -2], in: [split]) == nil, "punto fuera de la imagen no se colorea")
 let blue = view { _ in [0, 0, 255] }
-check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [128, 0, 128], "mezcla las vistas que ven el punto")
+let gray100 = view { _ in [100, 100, 100] }, gray110 = view { _ in [110, 110, 110] }
+check(MeshColor.color(of: [0, -0.5, -2], in: [gray100, gray110]) == [105, 105, 105], "mezcla las vistas que ven el punto")
 check(MeshColor.color(of: [0, -0.5, -2], normal: [0, 0, 1], in: [split]) == [255, 0, 0], "superficie de frente se colorea")
 check(MeshColor.color(of: [0, -0.5, -2], normal: [1, 0, 0], in: [split]) == nil, "superficie vista de canto no se colorea")
 check(MeshColor.color(of: [0.97, 0, -2], in: [split]) == nil, "el borde de la foto no se usa")
 check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue], blend: 1) == [0, 0, 255], "con blend 1 gana la vista más reciente")
-check(MeshColor.color(of: [0, -0.5, -2], in: [split] + Array(repeating: blue, count: 4)) == [0, 0, 255], "solo mezcla las 4 más recientes")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split] + Array(repeating: blue, count: 4)) == [0, 0, 255],
+      "un color que solo da una foto, mucho más claro que el resto, se descarta")
+// Brillo de una lámpara en una foto: más claro que la mediana del punto → fuera.
+let gray104 = view { _ in [104, 104, 104] }, highlight = view { _ in [240, 240, 235] }
+check(MeshColor.color(of: [0, -0.5, -2], in: [gray100, gray104, highlight]) == [102, 102, 102], "un brillo especular no tiñe el color")
+// Píxel quemado (255): no dice nada del color real.
+let burnt = view { _ in [255, 255, 255] }, gray90 = view { _ in [90, 90, 90] }
+check(MeshColor.color(of: [0, -0.5, -2], in: [burnt, gray90]) == [90, 90, 90], "un píxel quemado se ignora")
+// Exposición: la misma pared vista por una foto clara (100) y otra oscura (50) queda uniforme al corregir cada foto.
+let bright = view { _ in [100, 100, 100] }, dark = view { _ in [50, 50, 50] }
+let wall = (0..<2_500).map { i in SIMD3<Float>(Float(i % 50) / 50 - 0.5, Float(i / 50) / 50 - 0.5, -2) }
+let corrected = MeshColor.colors(of: wall, in: [bright, dark])
+check(corrected.allSatisfy { abs(Int($0.x) - 75) <= 2 }, "exposición distinta entre fotos se compensa (\(corrected[0]))")
 var moved = matrix_identity_float4x4
 moved.columns.3 = [0, 0, 1, 1]   // cámara 1 m más atrás: la pared queda a 3 m, la profundidad dice 2 m
 check(MeshColor.color(of: [0, -0.5, -2], in: [split, view(color: { _ in [0, 0, 255] }, transform: moved)]) == [255, 0, 0],
@@ -98,6 +111,46 @@ func board(blur: Bool) -> [UInt8] {
 }
 check(MeshColor.sharpness(rgba: board(blur: false), width: 64, height: 64) > 10 * MeshColor.sharpness(rgba: board(blur: true), width: 64, height: 64),
       "una foto nítida mide más nitidez que una movida")
+
+// Reflejos: habitación de 4×4 m con suelo, cuatro paredes y techo; un espejo en la pared del fondo crea una caja fantasma
+// 1 m detrás de ella y un suelo brillante, patas fantasma bajo el suelo. Un armario (frente de 2 m²) tiene cosas reales detrás.
+func grid(_ origin: SIMD3<Float>, _ u: SIMD3<Float>, _ v: SIMD3<Float>, _ n: Int = 20) -> (p: [SIMD3<Float>], i: [UInt32]) {
+    var p = [SIMD3<Float>](), i = [UInt32]()
+    for a in 0...n { for b in 0...n { p.append(origin + u * Float(a) / Float(n) + v * Float(b) / Float(n)) } }
+    for a in 0..<n { for b in 0..<n {
+        let k = UInt32(a * (n + 1) + b)
+        i += [k, k + UInt32(n + 1), k + 1, k + 1, k + UInt32(n + 1), k + UInt32(n + 2)]
+    } }
+    return (p, i)
+}
+func cube(_ low: SIMD3<Float>, _ size: SIMD3<Float>) -> [(p: [SIMD3<Float>], i: [UInt32])] {
+    let (x, y, z) = (SIMD3<Float>(size.x, 0, 0), SIMD3<Float>(0, size.y, 0), SIMD3<Float>(0, 0, size.z))
+    return [grid(low, x, y, 4), grid(low + z, x, y, 4), grid(low, z, y, 4), grid(low + x, z, y, 4), grid(low + y, x, z, 4)]
+}
+var room: (p: [SIMD3<Float>], i: [UInt32]) = ([], [])
+func add(_ parts: [(p: [SIMD3<Float>], i: [UInt32])]) {
+    for part in parts { let base = UInt32(room.p.count); room.p += part.p; room.i += part.i.map { $0 + base } }
+}
+add([grid([-2, 0, -2], [4, 0, 0], [0, 0, 4]),                 // suelo
+     grid([-2, 2.5, -2], [4, 0, 0], [0, 0, 4]),               // techo
+     grid([-2, 0, -2], [4, 0, 0], [0, 2.5, 0]),               // pared del fondo (z = -2), con el espejo
+     grid([-2, 0, 2], [4, 0, 0], [0, 2.5, 0]),
+     grid([-2, 0, -2], [0, 0, 4], [0, 2.5, 0]),
+     grid([2, 0, -2], [0, 0, 4], [0, 2.5, 0]),
+     grid([1, 0, -1.2], [0.9, 0, 0], [0, 2.2, 0])])           // frente del armario (z = -1.2)
+add(cube([1.2, 0, -1.9], [0.5, 0.6, 0.4]))                     // caja real detrás del armario
+add(cube([-0.5, 0.2, -3.4], [0.8, 0.8, 0.8]))                  // fantasma del espejo: 1,4 m tras la pared
+add(cube([-1, -0.9, 0], [0.3, 0.6, 0.3]))                      // fantasma del suelo brillante
+let cameras = (0..<12).map { k in SIMD3<Float>(cos(Float(k) * .pi / 6), 1.5, 0.5 + sin(Float(k) * .pi / 6)) }
+let cleanRoom = Reflections.removePhantoms(positions: room.p, indices: room.i, cameras: cameras)
+check(!cleanRoom.positions.contains { $0.z < -2.5 }, "espejo: la habitación fantasma tras la pared se quita")
+check(!cleanRoom.positions.contains { $0.y < -0.5 }, "suelo brillante: los reflejos bajo el suelo se quitan")
+check(cleanRoom.positions.contains { $0.z < -1.5 && $0.z > -1.95 && $0.x > 1.1 && $0.y > 0.1 }, "lo real detrás del armario se queda")
+check(cleanRoom.positions.contains { $0.z <= -1.99 } && cleanRoom.positions.contains { abs($0.y) < 0.01 }, "paredes y suelo se quedan")
+let lookingOut = (0..<12).map { k in SIMD3<Float>(Float(k), 1.5, 5) }   // fachada vista desde fuera: no hay «habitación»
+check(Reflections.removePhantoms(positions: room.p, indices: room.i, cameras: lookingOut).removed <= cleanRoom.removed,
+      "con el iPhone fuera, no quita más que con él dentro")
+check(Reflections.convexHull([[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0.5]]).count == 4, "envolvente convexa")
 
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
