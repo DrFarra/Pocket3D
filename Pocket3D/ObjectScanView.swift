@@ -98,14 +98,20 @@ struct ObjectScanView: View {
                 ContentUnavailableView("Modelo guardado", systemImage: "checkmark.circle",
                                        description: Text("Está en «Mis escaneos»."))
             } else if let progress = model.progress {
-                ProgressView("Generando modelo 3D… \(Int(progress * 100)) %", value: progress)
-                    .tint(.white).foregroundStyle(.white).padding(40)
+                VStack(spacing: 16) {
+                    ProgressView("Generando modelo 3D… \(Int(progress * 100)) %", value: progress)
+                    Text("Suele tardar 1–3 minutos. Deja la app abierta; al terminar se abrirá el modelo.")
+                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                .tint(.white).foregroundStyle(.white).padding(40)
             }
         }
         .scanChrome(confirmClose: model.session != nil || (model.progress != nil && !model.done && model.error == nil)) {
-            if model.done || model.error != nil { Button("Listo") { dismiss() } }
+            if model.error != nil { Button("Cerrar") { dismiss() } }
         }
         .task { model.start() }
+        // Al terminar, cierra y la pantalla de inicio abre el modelo recién creado.
+        .onChange(of: model.done) { _, done in if done { dismiss() } }
         .onDisappear { model.cancel() }
     }
 }
