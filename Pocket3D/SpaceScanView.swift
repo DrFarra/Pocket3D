@@ -131,6 +131,9 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     private var lastPose: simd_float4x4?
     private var capturing = false
     private var colorViews: [ColorView] = []
+    /// Dónde hay superficie real (celdas de 15 cm): lo que el splat ponga lejos de ahí es basura flotante.
+    private var surfaceCells = Set<SIMD3<Int32>>()
+    nonisolated static let surfaceCell: Float = 0.15
     private var previous: (pose: simd_float4x4, time: TimeInterval)?
     private var speed: Float = 0, turnRate: Float = 0
     private let config = ARWorldTrackingConfiguration()
@@ -230,21 +233,23 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         guard !anchors.isEmpty || !frames.isEmpty else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Aún no hay nada escaneado. Mueve el iPhone sobre la zona."])
         }
-        let (positions, indices) = Self.mesh(from: anchors)
+        let (rawPositions, rawIndices) = Self.mesh(from: anchors)
         let views = colorViews
         let work = self.work
         var meta: [String: Any] = ["camera_model": "OPENCV", "frames": frames]
-        if !positions.isEmpty { meta["ply_file_path"] = "mesh.ply" }  // nube inicial con color para splatfacto
+        if !rawPositions.isEmpty { meta["ply_file_path"] = "mesh.ply" }  // nube inicial con color para splatfacto
         let json = try JSONSerialization.data(withJSONObject: meta, options: .prettyPrinted)
         let hasFrames = !frames.isEmpty
 
         // shortcut: colorear recorre vértices × vistas en CPU (en paralelo); pasar a Metal si se queda corto.
-        try await Task.detached {
+        surfaceCells = try await Task.detached {
+            let (positions, indices) = MeshColor.clean(positions: rawPositions, indices: rawIndices)
             let colors = MeshColor.colors(of: positions, in: views, indices: indices)
             if !positions.isEmpty {
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
                 try ply.write(to: Scans.newURL("Espacio", ext: "ply"))
-                try MeshColor.glbData(positions: positions, colors: colors, indices: indices)
+                // Extra: si falla, que no se pierdan el PLY ni las fotos de abajo.
+                try? MeshColor.glbData(positions: positions, colors: colors, indices: indices)
                     .write(to: Scans.newURL("Espacio para Blender", ext: "glb"))
                 if hasFrames { try ply.write(to: work.appending(path: "mesh.ply")) }
             }
@@ -259,6 +264,7 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
                 try MeshColor.plyData(positions: picks.map { positions[$0] }, colors: picks.map { colors[$0] }, indices: [])
                     .write(to: work.appending(path: SplatTrainer.initialCloud))
             }
+            return MeshColor.occupiedCells(positions, cell: Self.surfaceCell)
         }.value
     }
 
@@ -282,6 +288,10 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         }.value
         if !saved {
             throw SplatTrainer.Failure(errorDescription: "Se terminó demasiado pronto para guardar el splat.")
+        }
+        let cells = surfaceCells
+        if !cells.isEmpty {
+            try? await Task.detached { try MeshColor.pruneSplat(at: output, near: cells, cell: Self.surfaceCell) }.value
         }
     }
 
