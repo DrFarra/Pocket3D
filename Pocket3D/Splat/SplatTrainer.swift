@@ -8,6 +8,10 @@ enum SplatTrainer {
     }
 
     static let iterations = 5000
+    /// Tope de tiempo entrenando (sin contar pausas): pasado esto se guarda lo aprendido. Nadie espera para siempre.
+    static let timeBudget: TimeInterval = 6 * 60
+    /// Por debajo de esto el splat aún es niebla: no merece la pena guardarlo.
+    static let minimumUsefulIterations: Int32 = 500
     /// Más fotos no caben en memoria a la vez: se usa una muestra repartida por todo el recorrido.
     static let maximumPhotos = 150
     /// Ancho de entrenamiento: buen detalle sin agotar memoria ni tiempo.
@@ -33,9 +37,10 @@ enum SplatTrainer {
         return (folder, max(1, Float(width) / Float(trainingWidth)))
     }
 
-    /// Entrena y guarda el splat en `output`. Devuelve false si se canceló.
+    /// Entrena y guarda el splat en `output`. `finishNow` corta y guarda lo que haya.
+    /// Devuelve false si se cortó demasiado pronto para guardar algo útil.
     static func train(folder: URL, downscale: Float, output: URL,
-                      isCancelled: () -> Bool, isPaused: () -> Bool, progress: (Double) -> Void) throws -> Bool {
+                      finishNow: () -> Bool, isPaused: () -> Bool, progress: (Double) -> Void) throws -> Bool {
         guard let metallib = Bundle.main.path(forResource: "default", ofType: "metallib") else {
             throw Failure(errorDescription: "Falta el motor Metal de splats en la app.")
         }
@@ -48,13 +53,19 @@ enum SplatTrainer {
         defer { pocket_splat_destroy(trainer) }
 
         var iteration: Int32 = 0
+        var trainingTime: TimeInterval = 0
+        var last = Date()
         while iteration < iterations {
-            if isCancelled() { return false }
-            if isPaused() { usleep(200_000); continue }
+            if isPaused() { usleep(200_000); last = Date(); continue }
+            if finishNow() || trainingTime > timeBudget { break }
             iteration = pocket_splat_step(trainer, &message, 512)
             if iteration < 0 { throw failure() }
-            if iteration % 20 == 0 { progress(Double(iteration) / Double(iterations)) }
+            let now = Date()
+            trainingTime += now.timeIntervalSince(last)
+            last = now
+            if iteration % 20 == 0 { progress(max(Double(iteration) / Double(iterations), trainingTime / timeBudget)) }
         }
+        guard iteration >= minimumUsefulIterations else { return false }
         guard pocket_splat_export(trainer, output.path, &message, 512) else { throw failure() }
         return true
     }

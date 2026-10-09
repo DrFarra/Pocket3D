@@ -89,9 +89,9 @@ private struct SplatProgressView: View {
                 Image(systemName: "sparkles").font(.system(size: 44)).foregroundStyle(.pink)
                 Text("Creando la versión fotorrealista").font(.title3.bold())
                 ProgressView(value: progress).tint(.pink).frame(maxWidth: 260)
-                Text("\(Int(progress * 100)) % · Tarda unos minutos. Deja el iPhone con la app abierta.")
+                Text("\(Int(progress * 100)) % · Como mucho 6 minutos. Deja la app abierta; si sales, se pausa.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Saltar (la malla ya está guardada)", action: skip).buttonStyle(.bordered).padding(.top, 8)
+                Button("Terminar ya (con menos detalle)", action: skip).buttonStyle(.bordered).padding(.top, 8)
             }
             .foregroundStyle(.white).padding(32)
         }
@@ -260,7 +260,7 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         defer { splatProgress = nil }
         _ = try await Task.detached(priority: .userInitiated) {
             try SplatTrainer.train(folder: folder, downscale: downscale, output: output,
-                                   isCancelled: { cancel.value }, isPaused: { cancel.isPaused }) { progress in
+                                   finishNow: { cancel.value }, isPaused: { cancel.isPaused }) { progress in
                 // Tras terminar (splatProgress = nil) se ignoran avisos rezagados.
                 Task { @MainActor in if self.splatProgress != nil { self.splatProgress = progress } }
             }
