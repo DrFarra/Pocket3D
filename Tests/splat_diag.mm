@@ -52,19 +52,24 @@ int main(int argc, char **argv) {
     }
     MsplatConfig base = msplat_default_config();
     base.iterations = 1500;
-    run("default", argv[1], base);
+    base.bgColor[0] = base.bgColor[1] = base.bgColor[2] = 0;
+    base.numDownscales = 0;
+    run("nd0", argv[1], base);
 
-    MsplatConfig scaled = base;
-    float s = 1500 / 30000.0f;
-    scaled.resolutionSchedule = (int)(3000 * s); scaled.warmupLength = (int)(500 * s);
-    scaled.stopScreenSizeAt = (int)(4000 * s); scaled.shDegreeInterval = (int)(1000 * s);
-    scaled.bgColor[0] = scaled.bgColor[1] = scaled.bgColor[2] = 0;
-    run("scaled", argv[1], scaled);
+    MsplatConfig noDensify = base;
+    noDensify.densifyGradThresh = 1e9f;   // nunca dividir ni duplicar
+    run("nd0_nodensify", argv[1], noDensify);
 
-    MsplatConfig sh0 = scaled; sh0.shDegree = 0;
-    run("scaled_sh0", argv[1], sh0);
+    MsplatConfig noReset = base;
+    noReset.resetAlphaEvery = 1000;       // sin reinicio de opacidad
+    run("nd0_noreset", argv[1], noReset);
 
-    MsplatConfig longer = base; longer.iterations = 4000;
-    run("default4000", argv[1], longer);
+    MsplatConfig neither = noDensify;
+    neither.resetAlphaEvery = 1000;
+    run("nd0_neither", argv[1], neither);
+
+    MsplatConfig downscaled = base;
+    downscaled.numDownscales = 2; downscaled.resolutionSchedule = 250;
+    run("nd2", argv[1], downscaled);
     return 0;
 }
