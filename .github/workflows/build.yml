@@ -49,6 +49,21 @@ jobs:
           venv/bin/python Tests/make_splat_dataset.py scene
           ./splatcheck scene "$PWD/default.metallib" splat.ply
           head -c 600 splat.ply | grep -a f_dc_0
+      - name: Diagnóstico (temporal)
+        if: always()
+        run: |
+          V=Pocket3D/Vendor/msplat
+          clang++ -std=c++17 -O2 -fno-objc-arc -DUSE_MPS=1 -I$V/include -I$V/metal -I$V/third_party \
+            $V/src/*.cpp $V/src/loaders/*.cpp $V/src/*.mm $V/metal/msplat_metal.mm Tests/splat_diag.mm \
+            -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders \
+            -framework ImageIO -framework CoreGraphics -o splatdiag
+          mkdir -p diag && cp scene/images/00000.jpg scene/images/00001.jpg diag/
+          ./splatdiag scene "$PWD/default.metallib"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: splat-diag
+          path: diag
 
   launch:
     # Arranca la app (Debug, con Dataset.selfCheck) en un simulador y comprueba que sigue viva.
