@@ -8,7 +8,8 @@ enum Dataset {
     private static let context = CIContext()
 
     /// Guarda foto + profundidad LiDAR de un fotograma y devuelve su entrada de transforms.json (formato nerfstudio).
-    static func write(_ frame: ARFrame, index: Int, to folder: URL) throws -> [String: Any] {
+    /// `fallbackDepth`: la del fotograma normal, por si el de alta resolución no trae profundidad.
+    static func write(_ frame: ARFrame, depth fallbackDepth: ARDepthData?, index: Int, to folder: URL) throws -> [String: Any] {
         let name = String(format: "%05d", index)
         let image = CIImage(cvPixelBuffer: frame.capturedImage)
         guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -25,7 +26,7 @@ enum Dataset {
             "fl_x": k[0][0], "fl_y": k[1][1], "cx": k[2][0], "cy": k[2][1],
             "w": Int(frame.camera.imageResolution.width), "h": Int(frame.camera.imageResolution.height),
         ]
-        if let depth = frame.sceneDepth, let png = depthPNG(depth) {
+        if let depth = frame.sceneDepth ?? fallbackDepth, let png = depthPNG(depth) {
             try png.write(to: folder.appending(path: "depth/\(name).png"))
             entry["depth_file_path"] = "depth/\(name).png"
         }
@@ -42,7 +43,8 @@ enum Dataset {
         confident && meters.isFinite && meters > 0 ? UInt16(min(meters * 1000, 65535)) : 0
     }
 
-    private static func depthPNG(_ data: ARDepthData) -> Data? {
+    /// Profundidad LiDAR en mm, a 0 donde ARKit no está seguro (confianza baja).
+    static func depthMillimeters(_ data: ARDepthData) -> (mm: [UInt16], width: Int, height: Int)? {
         let depth = data.depthMap
         let confidence = data.confidenceMap
         CVPixelBufferLockBaseAddress(depth, .readOnly)
@@ -62,8 +64,31 @@ enum Dataset {
                 mm[y * width + x] = millimeters(d[x], confident: confident)
             }
         }
+        return (mm, width, height)
+    }
 
-        let bytes = mm.withUnsafeBytes { Data($0) }
+    /// Foto reducida + profundidad de un fotograma normal de ARKit, para colorear la malla al guardar.
+    static func colorView(from frame: ARFrame, width: Int = 256) -> ColorView? {
+        guard let depth = frame.sceneDepth.flatMap(depthMillimeters) else { return nil }
+        let image = CIImage(cvPixelBuffer: frame.capturedImage)
+        let scale = CGFloat(width) / image.extent.width
+        let height = Int((image.extent.height * scale).rounded())
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+        context.render(image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)), toBitmap: &rgba, rowBytes: width * 4,
+                       bounds: CGRect(x: 0, y: 0, width: width, height: height), format: .RGBA8,
+                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        let k = frame.camera.intrinsics
+        let s = Float(scale)
+        return ColorView(worldToCamera: frame.camera.transform.inverse,
+                         fx: k[0][0] * s, fy: k[1][1] * s, cx: k[2][0] * s, cy: k[2][1] * s,
+                         width: width, height: height, rgba: rgba,
+                         depthMM: depth.mm, depthWidth: depth.width, depthHeight: depth.height)
+    }
+
+    private static func depthPNG(_ data: ARDepthData) -> Data? {
+        guard let depth = depthMillimeters(data) else { return nil }
+        let (width, height) = (depth.width, depth.height)
+        let bytes = depth.mm.withUnsafeBytes { Data($0) }
         guard let provider = CGDataProvider(data: bytes as CFData),
               let cgImage = CGImage(width: width, height: height, bitsPerComponent: 16, bitsPerPixel: 16, bytesPerRow: width * 2,
                                     space: CGColorSpaceCreateDeviceGray(),

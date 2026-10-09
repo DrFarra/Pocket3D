@@ -3,6 +3,7 @@ import QuickLook
 import RealityKit
 import RoomPlan
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct Pocket3DApp: App {
@@ -46,6 +47,8 @@ struct HomeView: View {
     @State private var scans = Scans.all()
     @State private var mode: ScanMode?
     @State private var preview: URL?
+    @State private var viewing: URL?
+    @State private var importing = false
 
     var body: some View {
         NavigationStack {
@@ -55,7 +58,7 @@ struct HomeView: View {
                             supported: ObjectCaptureSession.isSupported)
                     modeRow(.room, "Habitación", "house", "Paredes, puertas, ventanas y muebles con medidas reales.",
                             supported: RoomCaptureSession.isSupported)
-                    modeRow(.space, "Espacio / estructura", "building.2", "Malla LiDAR + fotos con pose y profundidad para splats en el PC.",
+                    modeRow(.space, "Espacio / estructura", "building.2", "Malla LiDAR en color + fotos con pose y profundidad para splats en el PC.",
                             supported: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh))
                 }
                 Section("Mis escaneos") {
@@ -63,8 +66,10 @@ struct HomeView: View {
                         Text("Aún no hay escaneos").foregroundStyle(.secondary)
                     }
                     ForEach(scans, id: \.self) { url in
-                        Button { preview = url } label: {
-                            Label(url.deletingPathExtension().lastPathComponent, systemImage: "cube.transparent")
+                        Button {
+                            if ModelViewer.extensions.contains(url.pathExtension.lowercased()) { viewing = url } else { preview = url }
+                        } label: {
+                            Label(url.deletingPathExtension().lastPathComponent, systemImage: Self.icon(for: url))
                         }
                     }
                     .onDelete { offsets in
@@ -75,8 +80,23 @@ struct HomeView: View {
             }
             .navigationTitle("Pocket3D")
             .refreshable { scans = Scans.all() }
+            .toolbar {
+                Button { importing = true } label: { Label("Importar del PC", systemImage: "square.and.arrow.down") }
+            }
         }
-        .quickLookPreview($preview, in: scans)
+        .quickLookPreview($preview)
+        .fullScreenCover(isPresented: Binding(get: { viewing != nil }, set: { if !$0 { viewing = nil } })) {
+            if let viewing { ModelViewer(url: viewing) }
+        }
+        // Splats de Postshot/nerfstudio o mallas de RealityScan: se copian a Scans para verlos aquí.
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            for url in (try? result.get()) ?? [] {
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                try? FileManager.default.copyItem(at: url, to: Scans.newURL(url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+            }
+            scans = Scans.all()
+        }
         .fullScreenCover(item: $mode, onDismiss: { scans = Scans.all() }) { mode in
             Group {
                 switch mode {
@@ -88,6 +108,16 @@ struct HomeView: View {
             .preferredColorScheme(.dark)
             .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
             .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        }
+    }
+
+    private static func icon(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "zip": "doc.zipper"
+        case "spz", "splat": "sparkles"
+        case "ply": MeshColor.isGaussianSplatPLY(url) ? "sparkles" : "square.stack.3d.up.fill"
+        case "obj", "stl": "square.stack.3d.up"
+        default: "cube.transparent"
         }
     }
 

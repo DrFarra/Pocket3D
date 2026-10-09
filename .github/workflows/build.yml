@@ -22,6 +22,13 @@ jobs:
           name: Pocket3D-ipa
           path: Pocket3D.ipa
 
+  tests:
+    # Coloreado de malla, PLY y su carga en ModelIO/SceneKit, con el código real de la app.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swiftc Pocket3D/MeshColor.swift Tests/main.swift -o meshcheck && ./meshcheck
+
   launch:
     # Arranca la app (Debug, con Dataset.selfCheck) en un simulador y comprueba que sigue viva.
     runs-on: macos-latest

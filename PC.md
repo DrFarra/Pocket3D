@@ -22,7 +22,7 @@ Postshot calcula sus propias poses, así que funciona con cualquiera de los dos 
 
 ## 3. Espacio → splat usando las poses de ARKit y la profundidad LiDAR: nerfstudio (avanzado)
 
-El zip `… Espacio dataset.zip` trae `transforms.json` en formato **nerfstudio**: no hace falta COLMAP, ya lleva la pose de cada foto (ARKit), sus intrínsecos y un mapa de profundidad LiDAR en mm (`depth/*.png`, 0 = sin dato fiable).
+El zip `… Espacio dataset.zip` trae `transforms.json` en formato **nerfstudio**: no hace falta COLMAP, ya lleva la pose de cada foto (ARKit), sus intrínsecos, un mapa de profundidad LiDAR en mm (`depth/*.png`, 0 = sin dato fiable) y `mesh.ply`, la malla LiDAR en color que `splatfacto` usa como nube inicial (converge antes y con menos "flotadores" que con inicio aleatorio).
 
 Recomendado en **WSL2 (Ubuntu)** con el driver NVIDIA de Windows actualizado. Las RTX 50 (Blackwell) necesitan PyTorch compilado para **CUDA 12.8 o superior**:
 
@@ -38,6 +38,10 @@ ns-export gaussian-splat --load-config outputs/*/splatfacto/*/config.yml --outpu
 
 Si las poses de ARKit han derivado (escaneos muy grandes), Postshot (opción 2) recalcula las poses y suele dar mejor resultado.
 
+## 4. Verlo en el iPhone
+
+Pasa el resultado al iPhone (`.ply`/`.spz` del splat, u `.obj` de RealityScan) por Drive/OneDrive o con *Dispositivos Apple* a la carpeta Pocket3D, y en la app pulsa **Importar del PC**. Los splats se ven fotorrealistas en el propio iPhone; si salen torcidos, doble toque.
+
 ## ¿Qué uso?
 
 | Quiero… | Herramienta |
@@ -45,4 +49,4 @@ Si las poses de ARKit han derivado (escaneos muy grandes), Postshot (opción 2) 
 | Imprimir en 3D / CAD / medir un objeto | RealityScan con `Objeto fotos.zip` |
 | Que se vea como una foto, desde cualquier ángulo | Postshot con cualquiera de los zips |
 | Medidas de una estancia | El USDZ de Habitación (RoomPlan) |
-| Malla a escala de una fachada o terreno | El USDZ/OBJ de Espacio (directo del iPhone) |
+| Malla en color a escala de una fachada o terreno | El PLY de Espacio (directo del iPhone; ábrelo en Blender, MeshLab o CloudCompare) |

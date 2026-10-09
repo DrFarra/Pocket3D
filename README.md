@@ -6,9 +6,18 @@ Escáner 3D para iPhone con LiDAR (pensado para el 17 Pro Max) + procesado de m�
 |------|----------------------------|-----------------------------|
 | **Objeto** | Modelo USDZ texturizado (Object Capture) | `… Objeto fotos.zip`: las fotos JPEG a resolución completa → RealityScan / Postshot |
 | **Habitación** | Plano 3D con medidas (RoomPlan, USDZ) | — |
-| **Espacio / estructura** | Malla LiDAR a escala real (USDZ) | `… Espacio dataset.zip`: fotos de alta resolución + pose de ARKit + profundidad LiDAR (formato nerfstudio) → Gaussian splats |
+| **Espacio / estructura** | Malla LiDAR a escala real **en color** (PLY, coloreada con las fotos) | `… Espacio dataset.zip`: fotos de alta resolución + pose de ARKit + profundidad LiDAR + nube de color inicial (formato nerfstudio) → Gaussian splats |
 
-Todo queda en «Mis escaneos» (vista 3D/AR y botón compartir) y en **Archivos → En mi iPhone → Pocket3D → Scans**.
+## Ver tus escaneos en el iPhone
+
+En «Mis escaneos» toca cualquier escaneo:
+
+- **Objeto / Habitación (USDZ)**: vista 3D y botón de **realidad aumentada** para ponerlo en tu mesa o tu suelo.
+- **Espacio (PLY en color)**: visor 3D propio; arrastra para girar, pellizca para zoom.
+- **Gaussian splats hechos en el PC** (`.ply` / `.spz` / `.splat` de Postshot o nerfstudio): botón **Importar del PC** (arriba a la derecha) y tócalo para verlo fotorrealista en el iPhone. Arrastra para girar, pellizca para zoom y **doble toque** si sale torcido (cambia qué eje es "arriba").
+- **Mallas del PC** (`.obj` / `.ply` / `.stl` de RealityScan): igual, con *Importar del PC*.
+
+Todo está también en **Archivos → En mi iPhone → Pocket3D → Scans** (puedes copiar ahí archivos desde Windows con la app *Dispositivos Apple*).
 
 ## Instalar en el iPhone sin Mac (desde Windows)
 
@@ -31,8 +40,8 @@ Ver **[PC.md](PC.md)**.
 ## Consejos de captura
 
 - **Objeto**: luz difusa, sin brillos directos, objeto sobre superficie lisa; 2–3 vueltas a distintas alturas.
-- **Espacio**: camina despacio (la app guarda una foto cada ~10 cm o ~10°), vuelve a pasar por zonas sin malla y termina cerca de donde empezaste (cierra el bucle). El LiDAR alcanza ~5 m.
+- **Espacio**: camina despacio (la app guarda una foto cada ~10 cm o ~10° y avisa en rojo si vas demasiado rápido), vuelve a pasar por zonas sin malla y termina cerca de donde empezaste (cierra el bucle). El LiDAR alcanza ~5 m.
 
 ## Desarrollo
 
-`Pocket3D.xcodeproj` (Xcode 16+, iOS 17+). Cada push compila en GitHub Actions (macOS) y publica la IPA.
+`Pocket3D.xcodeproj` (Xcode 16.3+, iOS 18+, paquete [MetalSplatter](https://github.com/scier/MetalSplatter) para los splats). Cada push compila en GitHub Actions (macOS), ejecuta `Tests/main.swift`, arranca la app en un simulador y publica la IPA.
