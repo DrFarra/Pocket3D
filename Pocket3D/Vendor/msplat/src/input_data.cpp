@@ -71,6 +71,11 @@ MTensor& Camera::getGPUImage(int downscaleFactor) {
     MTensor mt = gpu_empty({img.height, img.width, 3}, DType::Float32);
     memcpy(mt.data_ptr(), img.ptr(), img.width * img.height * 3 * sizeof(float));
     mtensorImageCache[downscaleFactor] = mt;
+    // Pocket3D: sin pirámide de resoluciones (numDownscales = 0) la copia en CPU ya no se usa.
+    if (downscaleFactor <= 1 && imagePyramids.empty()) {
+        image.data.clear();
+        image.data.shrink_to_fit();
+    }
     return mtensorImageCache[downscaleFactor];
 }
 

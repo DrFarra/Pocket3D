@@ -21,7 +21,8 @@ enum SplatTrainer {
     static let maximumInitialPoints = 60_000
     static let initialCloud = "init.ply"
     /// Si queda menos memoria libre que esto, se guarda lo aprendido antes de que iOS cierre la app.
-    static let memoryFloor = 1_000_000_000
+    /// Crece con las gaussianas: una ronda de densificación puede reservar ~3 KB por gaussiana de golpe.
+    static func memoryFloor(gaussians: Int) -> Int { max(1_000_000_000, gaussians * 3_000) }
 
     /// Prepara `dataset/train/transforms.json` con una muestra de fotos y devuelve la carpeta y el factor de reducción.
     static func prepare(dataset: URL, frames: [[String: Any]], hasCloud: Bool) throws -> (folder: URL, downscale: Float) {
@@ -50,7 +51,7 @@ enum SplatTrainer {
         guard let metallib = Bundle.main.path(forResource: "default", ofType: "metallib") else {
             throw Failure(errorDescription: "Falta el motor Metal de splats en la app.")
         }
-        guard os_proc_available_memory() > memoryFloor * 2 else {
+        guard os_proc_available_memory() > 2 * memoryFloor(gaussians: 0) else {
             throw Failure(errorDescription: "No hay memoria libre suficiente. Cierra otras apps y vuelve a intentarlo.")
         }
         var message = [CChar](repeating: 0, count: 512)
@@ -65,11 +66,19 @@ enum SplatTrainer {
         var outOfMemory = false
         var trainingTime: TimeInterval = 0
         var last = Date()
+        var wasPaused = false
         while iteration < iterations {
-            if isPaused() { usleep(200_000); last = Date(); continue }
+            if isPaused() {
+                // Vaciar la cola de la GPU antes de quedar en segundo plano, donde iOS no deja usarla.
+                if !wasPaused { pocket_splat_sync(); wasPaused = true }
+                usleep(200_000)
+                last = Date()
+                continue
+            }
+            wasPaused = false
             if finishNow() || trainingTime > timeBudget { break }
             // Las gaussianas crecen al densificar: antes de que iOS mate la app por memoria, se guarda lo que haya.
-            if os_proc_available_memory() < memoryFloor { outOfMemory = true; break }
+            if os_proc_available_memory() < memoryFloor(gaussians: Int(pocket_splat_count(trainer))) { outOfMemory = true; break }
             iteration = pocket_splat_step(trainer, &message, 512)
             if iteration < 0 { throw failure() }
             let now = Date()
@@ -83,7 +92,13 @@ enum SplatTrainer {
             }
             return false
         }
-        guard pocket_splat_export(trainer, output.path, &message, 512) else { throw failure() }
+        // A un temporal y luego a su sitio: un splat a medias nunca aparece en la biblioteca.
+        let partial = output.deletingLastPathComponent().appending(path: ".\(output.lastPathComponent).tmp")
+        guard pocket_splat_export(trainer, partial.path, &message, 512) else {
+            try? FileManager.default.removeItem(at: partial)
+            throw failure()
+        }
+        try FileManager.default.moveItem(at: partial, to: output)
         return true
     }
 }

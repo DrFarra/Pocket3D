@@ -13,7 +13,10 @@ struct SpaceScanView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ARViewRepresentable(arView: model.arView)
+        Group {
+            // Mientras se entrena el splat, fuera la vista AR: RealityKit seguiría dibujando y quitándole GPU.
+            if model.splatProgress == nil { ARViewRepresentable(arView: model.arView) } else { Color.black }
+        }
             .ignoresSafeArea()
             .overlay(alignment: .top) {
                 Group {
@@ -250,7 +253,7 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             if hasFrames && !positions.isEmpty {
                 // Nube de partida del splat: una muestra de la malla. Con todos los vértices (157 000 en una
                 // habitación) las gaussianas se multiplican y la app se queda sin memoria.
-                let picks = Array(stride(from: 0, to: positions.count, by: max(1, positions.count / SplatTrainer.maximumInitialPoints)))
+                let picks = Array(stride(from: 0, to: positions.count, by: (positions.count + SplatTrainer.maximumInitialPoints - 1) / SplatTrainer.maximumInitialPoints))
                 try MeshColor.plyData(positions: picks.map { positions[$0] }, colors: picks.map { colors[$0] }, indices: [])
                     .write(to: work.appending(path: SplatTrainer.initialCloud))
             }
@@ -259,19 +262,25 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Gaussian splat fotorrealista entrenado en el iPhone con las fotos, las poses de ARKit y la malla en color.
     func trainSplat() async throws {
-        let hasCloud = FileManager.default.fileExists(atPath: work.appending(path: SplatTrainer.initialCloud).path)
-        let (folder, downscale) = try SplatTrainer.prepare(dataset: work, frames: frames, hasCloud: hasCloud)
+        // msplat no tiene arranque aleatorio: sin nube de partida entrenaría 0 gaussianas durante minutos.
+        guard FileManager.default.fileExists(atPath: work.appending(path: SplatTrainer.initialCloud).path) else {
+            throw SplatTrainer.Failure(errorDescription: "No hay malla de la que partir para el splat. Escanea despacio hasta ver la malla.")
+        }
+        let (folder, downscale) = try SplatTrainer.prepare(dataset: work, frames: frames, hasCloud: true)
         let output = Scans.newURL("Espacio splat", ext: "ply")
         let cancel = splatCancel
         splatProgress = 0
         defer { splatProgress = nil }
-        _ = try await Task.detached(priority: .userInitiated) {
+        let saved = try await Task.detached(priority: .userInitiated) {
             try SplatTrainer.train(folder: folder, downscale: downscale, output: output,
                                    finishNow: { cancel.value }, isPaused: { cancel.isPaused }) { progress in
                 // Tras terminar (splatProgress = nil) se ignoran avisos rezagados.
                 Task { @MainActor in if self.splatProgress != nil { self.splatProgress = progress } }
             }
         }.value
+        if !saved {
+            throw SplatTrainer.Failure(errorDescription: "Se terminó demasiado pronto para guardar el splat.")
+        }
     }
 
     func cancelSplat() { splatCancel.cancel() }

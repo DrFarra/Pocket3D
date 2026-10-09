@@ -9,7 +9,7 @@ int main(int argc, char **argv) {
     char error[512] = {0};
     const int iterations = 1500;
     const float minimumPSNR = 25;  // hoy da ~29 dB; roto (poses mal, fase a baja resolución) daba 10–17 dB
-    PocketSplatTrainer trainer = pocket_splat_create(argv[1], argv[2], iterations, 1.0f, true, error, sizeof error);
+    PocketSplatTrainer trainer = pocket_splat_create(argv[1], argv[2], iterations, 2.0f, true, error, sizeof error);
     if (!trainer) { printf("FALLO al crear: %s\n", error); return 1; }
     int iteration = 0;
     while (iteration < iterations) {

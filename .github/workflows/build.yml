@@ -49,6 +49,7 @@ jobs:
           venv/bin/python Tests/make_splat_dataset.py scene
           ./splatcheck scene "$PWD/default.metallib" splat.ply
           head -c 600 splat.ply | grep -a f_dc_0
+          venv/bin/python Tests/check_splat_bounds.py splat.ply
 
   launch:
     # Arranca la app (Debug, con Dataset.selfCheck) en un simulador y comprueba que sigue viva.

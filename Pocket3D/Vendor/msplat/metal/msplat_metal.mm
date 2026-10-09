@@ -1,3 +1,4 @@
+#include <stdexcept>
 #import "bindings.h"
 #define BLOCK_X 16
 #define BLOCK_Y 16
@@ -281,6 +282,8 @@ MetalContext* get_global_context() {
     static MetalContext* ctx = NULL;
     if (ctx == NULL) {
         ctx = init_msplat_metal_context();
+        // Pocket3D: sin contexto (metallib ausente) cada llamada desreferenciaría NULL: mejor un error capturable.
+        if (ctx == NULL) throw std::runtime_error("No se pudo iniciar el motor Metal de splats.");
     }
     return ctx;
 }

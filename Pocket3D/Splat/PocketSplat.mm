@@ -14,8 +14,12 @@ void report(char *error, int length, const char *what) {
 }
 }
 
+// Todas las entradas llevan @autoreleasepool: el núcleo compila sin ARC y cada paso crea ~8 codificadores
+// Metal autoliberados. Sin un pool que se vacíe en cada paso, la memoria crece hasta que iOS cierra la app.
+
 PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *metallibPath, int iterations,
                                        float downscale, bool holdOutViews, char *error, int errorLength) {
+    @autoreleasepool {
     MsplatDataset dataset = nullptr;
     try {
         msplat_set_metallib_path(metallibPath);
@@ -33,6 +37,8 @@ PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *meta
         config.warmupLength = (int)(500 * scale) > 0 ? (int)(500 * scale) : 1;
         config.stopScreenSizeAt = (int)(4000 * scale);
         config.shDegreeInterval = (int)(1000 * scale) > 0 ? (int)(1000 * scale) : 1;
+        // Reinicio de opacidad y poda de gaussianas enormes cada ~10 % del entrenamiento, como en el original.
+        config.resetAlphaEvery = (int)(30 * scale) > 0 ? (int)(30 * scale) : 1;
         config.bgColor[0] = config.bgColor[1] = config.bgColor[2] = 0.0f;
         // El entrenamiento progresivo a baja resolución de msplat da splats borrosos y desplazados
         // (12 dB frente a 16 dB en la prueba sintética): se entrena siempre a la resolución elegida.
@@ -49,9 +55,11 @@ PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *meta
         report(error, errorLength, "Error desconocido al preparar el entrenamiento.");
     }
     return nullptr;
+    }
 }
 
 int pocket_splat_step(PocketSplatTrainer trainer, char *error, int errorLength) {
+    @autoreleasepool {
     try {
         return msplat_trainer_step(static_cast<Session *>(trainer)->trainer).iteration;
     } catch (const std::exception &e) {
@@ -60,6 +68,11 @@ int pocket_splat_step(PocketSplatTrainer trainer, char *error, int errorLength) 
         report(error, errorLength, "Error desconocido al entrenar.");
     }
     return -1;
+    }
+}
+
+void pocket_splat_sync(void) {
+    @autoreleasepool { msplat_sync(); }
 }
 
 int pocket_splat_count(PocketSplatTrainer trainer) {
@@ -67,14 +80,17 @@ int pocket_splat_count(PocketSplatTrainer trainer) {
 }
 
 float pocket_splat_psnr(PocketSplatTrainer trainer) {
+    @autoreleasepool {
     try {
         return msplat_trainer_evaluate(static_cast<Session *>(trainer)->trainer).psnr;
     } catch (...) {
         return 0;
     }
+    }
 }
 
 bool pocket_splat_export(PocketSplatTrainer trainer, const char *plyPath, char *error, int errorLength) {
+    @autoreleasepool {
     try {
         msplat_trainer_export_ply(static_cast<Session *>(trainer)->trainer, plyPath);
         return true;
@@ -84,12 +100,16 @@ bool pocket_splat_export(PocketSplatTrainer trainer, const char *plyPath, char *
         report(error, errorLength, "Error desconocido al guardar el splat.");
     }
     return false;
+    }
 }
 
 void pocket_splat_destroy(PocketSplatTrainer trainer) {
+    @autoreleasepool {
     auto *session = static_cast<Session *>(trainer);
+    msplat_sync();       // que la GPU termine antes de liberar lo que usa
     msplat_trainer_destroy(session->trainer);
     msplat_dataset_destroy(session->dataset);
-    msplat_sync();
+    msplat_cleanup();    // búferes globales de msplat: cientos de MB que el visor necesita después
     delete session;
+    }
 }

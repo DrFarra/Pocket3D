@@ -198,6 +198,7 @@ void Model::ensureCapacity(int needed){
     if (needed <= buf_capacity) return;
     int new_cap = std::max(needed, buf_capacity * 2);
 
+    msplat_gpu_sync();  // Pocket3D: no copiar búferes que la GPU aún está escribiendo
     auto grow = [&](MTensor &buf) {
         auto shape = buf.shape();
         shape[0] = new_cap;

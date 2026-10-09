@@ -37,9 +37,12 @@ Dataset::Dataset(const std::string& path, float downscaleFactor,
         impl->trainCams = std::get<0>(split);
         impl->testCams = std::get<1>(split);
     } else {
-        auto t = impl->data.getCameras(false);
-        impl->trainCams = std::get<0>(t);
+        // Pocket3D: mover en vez de copiar (cada foto ocupa ~5 MB en float32).
+        impl->trainCams = std::move(impl->data.cameras);
     }
+    // Pocket3D: tras el reparto nadie vuelve a leer data.cameras; liberar la copia.
+    impl->data.cameras.clear();
+    impl->data.cameras.shrink_to_fit();
 }
 
 Dataset::~Dataset() = default;
