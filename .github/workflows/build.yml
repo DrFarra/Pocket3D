@@ -1,0 +1,58 @@
+name: Build
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Compila para dispositivo (las APIs de LiDAR/RoomPlan no existen en el simulador).
+      - run: xcodebuild -project Pocket3D.xcodeproj -scheme Pocket3D -destination 'generic/platform=iOS' -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      # IPA sin firmar: Sideloadly (Windows) la firma con tu Apple ID al instalarla.
+      - run: mkdir Payload && cp -R build/Build/Products/Release-iphoneos/Pocket3D.app Payload/ && zip -qr Pocket3D.ipa Payload
+      - name: Comprobar la IPA
+        run: |
+          plist=Payload/Pocket3D.app/Info.plist
+          plutil -extract NSCameraUsageDescription raw "$plist"
+          plutil -extract UIFileSharingEnabled raw "$plist"
+          plutil -extract MinimumOSVersion raw "$plist"
+          lipo -info Payload/Pocket3D.app/Pocket3D | grep arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pocket3D-ipa
+          path: Pocket3D.ipa
+
+  tests:
+    # Coloreado de malla, PLY y su carga en ModelIO/SceneKit, con el código real de la app.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swiftc Pocket3D/MeshColor.swift Tests/main.swift -o meshcheck && ./meshcheck
+
+  launch:
+    # Arranca la app (Debug, con Dataset.selfCheck) en un simulador y comprueba que sigue viva.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -project Pocket3D.xcodeproj -scheme Pocket3D -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Lanzar en simulador
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r,l in d.items() if 'iOS' in r for x in l if 'iPhone' in x['name']))")
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid"
+          xcrun simctl install "$udid" build/Build/Products/Debug-iphonesimulator/Pocket3D.app
+          # Escaneos de ejemplo para que la captura muestre la biblioteca.
+          scans="$(xcrun simctl get_app_container "$udid" com.drfarra.Pocket3D data)/Documents/Scans"
+          mkdir -p "$scans"
+          for f in "2026-10-09 10.00.00 Objeto.usdz" "2026-10-09 10.00.00 Objeto fotos.zip" "2026-10-09 11.30.00 Plano 3 habitaciones.usdz" \
+                   "2026-10-09 12.00.00 Espacio.ply" "2026-10-09 12.00.00 Espacio dataset.zip"; do
+            head -c 250000 /dev/zero > "$scans/$f"
+          done
+          xcrun simctl launch "$udid" com.drfarra.Pocket3D
+          sleep 15
+          xcrun simctl io "$udid" screenshot home.png
+          xcrun simctl spawn "$udid" launchctl list | grep com.drfarra.Pocket3D
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshot
+          path: home.png
