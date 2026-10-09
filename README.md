@@ -6,7 +6,7 @@ Escáner 3D para iPhone con LiDAR (pensado para el 17 Pro Max) + procesado de m�
 |------|----------------------------|-----------------------------|
 | **Objeto** | Modelo USDZ texturizado (Object Capture) | `… Objeto fotos.zip`: las fotos JPEG a resolución completa → RealityScan / Postshot |
 | **Habitación** | Plano 3D con medidas (RoomPlan, USDZ). Pulsa *Otra habitación* para seguir y unirlas todas en un solo plano de la casa | — |
-| **Espacio / estructura** | Malla LiDAR a escala real **en color** (PLY, coloreada con las fotos) | `… Espacio dataset.zip`: fotos de alta resolución + pose de ARKit + profundidad LiDAR + nube de color inicial (formato nerfstudio) → Gaussian splats |
+| **Espacio / estructura** | Malla LiDAR a escala real **en color** (PLY) + **Gaussian splat fotorrealista entrenado en el propio iPhone** (unos minutos; se puede saltar) | `… Espacio dataset.zip`: fotos de alta resolución + pose de ARKit + profundidad LiDAR + nube de color inicial (formato nerfstudio) → Gaussian splats |
 
 ## Ver tus escaneos en el iPhone
 
@@ -14,6 +14,7 @@ En «Mis escaneos» toca cualquier escaneo:
 
 - **Objeto / Habitación (USDZ)**: vista 3D y botón de **realidad aumentada** para ponerlo en tu mesa o tu suelo.
 - **Espacio (PLY en color)**: visor 3D propio; arrastra para girar, pellizca para zoom.
+- **Espacio splat**: la versión fotorrealista hecha en el iPhone (motor [msplat](https://github.com/rayanht/msplat) sobre Metal, con las poses de ARKit y la malla LiDAR como punto de partida).
 - **Gaussian splats hechos en el PC** (`.ply` / `.spz` / `.splat` de Postshot o nerfstudio): botón **Importar del PC** (arriba a la derecha) y tócalo para verlo fotorrealista en el iPhone. Arrastra para girar, pellizca para zoom y **doble toque** si sale torcido (cambia qué eje es "arriba").
 - **Mallas del PC** (`.obj` / `.ply` / `.stl` de RealityScan): igual, con *Importar del PC*.
 
@@ -44,4 +45,4 @@ Ver **[PC.md](PC.md)**.
 
 ## Desarrollo
 
-`Pocket3D.xcodeproj` (Xcode 16.3+, iOS 18+, paquete [MetalSplatter](https://github.com/scier/MetalSplatter) para los splats). Cada push compila en GitHub Actions (macOS), ejecuta `Tests/main.swift`, arranca la app en un simulador y publica la IPA.
+`Pocket3D.xcodeproj` (Xcode 16.3+, iOS 18+). Splats: [MetalSplatter](https://github.com/scier/MetalSplatter) para verlos y el núcleo de [msplat](https://github.com/rayanht/msplat) (Apache 2.0, en `Pocket3D/Vendor`) para entrenarlos. Cada push compila en GitHub Actions (macOS), ejecuta `Tests/main.swift`, entrena un splat de prueba y exige ≥ 25 dB de PSNR en vistas no vistas, arranca la app en un simulador y publica la IPA.

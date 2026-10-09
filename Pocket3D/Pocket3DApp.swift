@@ -7,9 +7,16 @@ import UniformTypeIdentifiers
 
 @main
 struct Pocket3DApp: App {
-    #if DEBUG
-    init() { Dataset.selfCheck() }
-    #endif
+    init() {
+        #if DEBUG
+        Dataset.selfCheck()
+        #endif
+        // Restos de escaneos interrumpidos (la app cerrada a medias): pueden ser gigas.
+        let tmp = FileManager.default.temporaryDirectory
+        for url in (try? FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil)) ?? [] {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
 
     var body: some SwiftUI.Scene {
         WindowGroup { HomeView() }
@@ -65,9 +72,10 @@ enum ScanMode: String, Identifiable, CaseIterable {
     var tips: [Tip] {
         switch self {
         case .object: [
-            Tip(icon: "lightbulb.fill", text: "Pon el objeto sobre una mesa despejada, con luz suave y sin sombras duras."),
-            Tip(icon: "cube.transparent", text: "Ajusta la caja para que envuelva el objeto y pulsa «Empezar captura»."),
-            Tip(icon: "arrow.2.circlepath", text: "Rodéalo despacio. Al completar la vuelta, da otra más alta o más baja, o pulsa «Terminar»."),
+            Tip(icon: "lightbulb.fill", text: "Mesa lisa y despejada, luz suave. Evita sol directo y focos que hagan brillos."),
+            Tip(icon: "scope", text: "Apunta al objeto: la app lo detecta y fija la caja sola en 2 segundos."),
+            Tip(icon: "arrow.2.circlepath", text: "Rodéalo despacio. Al completar la vuelta, toca «Ver cómo va» para ver los huecos y da otra vuelta más alta o más baja."),
+            Tip(icon: "sparkles", text: "Vidrio, espejos o metal muy brillante confunden a cualquier escáner: cúbrelos con spray mate o talco, o usa Postshot en el PC."),
         ]
         case .room: [
             Tip(icon: "lightbulb.fill", text: "Enciende las luces y abre las puertas que quieras incluir."),
@@ -103,9 +111,12 @@ enum Scans {
         folder.appending(path: "\(stamp.string(from: .now)) \(kind).\(ext)")
     }
 
+    /// Lo que se puede abrir; las texturas y .mtl que acompañan a un .obj importado no se listan.
+    static let listed: Set<String> = ["usdz", "reality", "ply", "spz", "splat", "obj", "stl", "zip"]
+
     static func all() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        return urls.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        return urls.filter { listed.contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
 }
 
@@ -115,6 +126,7 @@ struct HomeView: View {
     @State private var preview: URL?
     @State private var viewing: URL?
     @State private var importing = false
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -157,13 +169,25 @@ struct HomeView: View {
         // Splats de Postshot/nerfstudio o mallas de RealityScan: se copian a Scans para verlos aquí.
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             let before = Set(scans)
-            for url in (try? result.get()) ?? [] {
+            let urls = (try? result.get()) ?? []
+            var failed = [String]()
+            for url in urls {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
-                try? FileManager.default.copyItem(at: url, to: Scans.newURL(url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+                // Varios archivos a la vez (p. ej. .obj + .mtl + texturas): nombres originales para que se sigan encontrando.
+                var destination = urls.count > 1 ? Scans.folder.appending(path: url.lastPathComponent)
+                    : Scans.newURL(url.deletingPathExtension().lastPathComponent, ext: url.pathExtension)
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    destination = Scans.newURL(url.deletingPathExtension().lastPathComponent, ext: url.pathExtension)
+                }
+                do { try FileManager.default.copyItem(at: url, to: destination) } catch { failed.append(url.lastPathComponent) }
             }
+            if !failed.isEmpty { importError = "No se pudo importar: " + failed.joined(separator: ", ") }
             openNewest(since: before)
         }
+        .alert("Importar", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button("OK") { importError = nil }
+        } message: { Text(importError ?? "") }
         .fullScreenCover(item: $mode, onDismiss: { openNewest(since: Set(scans)) }) { ScanContainer(mode: $0) }
     }
 
@@ -323,6 +347,7 @@ private struct ScanContainer: View {
                 .tint(.white).padding().accessibilityLabel("Cómo escanear")
         }
         .sheet(isPresented: $showTips) { TipsSheet(mode: mode).presentationDetents([.medium, .large]) }
+        .environment(\.scanPaused, showTips)  // nada se fija ni empieza mientras se leen los consejos
         .preferredColorScheme(.dark)
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
@@ -351,11 +376,18 @@ private struct TipsSheet: View {
     }
 }
 
+extension EnvironmentValues {
+    /// true mientras hay algo tapando la pantalla de escaneo (p. ej. los consejos).
+    @Entry var scanPaused = false
+}
+
 /// Botones de cierre y acción comunes a las tres pantallas de escaneo.
 struct ScanChrome<Action: View>: ViewModifier {
     @Environment(\.dismiss) private var dismiss
     /// Si hay algo escaneado sin guardar, pregunta antes de cerrar.
     let confirmClose: Bool
+    /// Mientras se guarda no se puede cerrar: se perdería o quedaría a medias.
+    let closeDisabled: Bool
     let action: Action
     @State private var confirming = false
 
@@ -366,6 +398,7 @@ struct ScanChrome<Action: View>: ViewModifier {
                     Image(systemName: "xmark.circle.fill").font(.largeTitle)
                 }
                 .tint(.white).padding().accessibilityLabel("Cerrar")
+                .disabled(closeDisabled).opacity(closeDisabled ? 0.3 : 1)
             }
             .overlay(alignment: .bottom) {
                 action.buttonStyle(.borderedProminent).controlSize(.large).padding(.bottom, 40)
@@ -379,7 +412,7 @@ struct ScanChrome<Action: View>: ViewModifier {
 }
 
 extension View {
-    func scanChrome<A: View>(confirmClose: Bool = false, @ViewBuilder action: () -> A) -> some View {
-        modifier(ScanChrome(confirmClose: confirmClose, action: action()))
+    func scanChrome<A: View>(confirmClose: Bool = false, closeDisabled: Bool = false, @ViewBuilder action: () -> A) -> some View {
+        modifier(ScanChrome(confirmClose: confirmClose, closeDisabled: closeDisabled, action: action()))
     }
 }

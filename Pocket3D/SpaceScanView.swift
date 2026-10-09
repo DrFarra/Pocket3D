@@ -9,42 +9,99 @@ struct SpaceScanView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
     @State private var saving = false
+    @State private var dismissAfterAlert = false
 
     var body: some View {
         ARViewRepresentable(arView: model.arView)
             .ignoresSafeArea()
             .overlay(alignment: .top) {
-                Text(model.tooFast ? "Más despacio: las fotos salen movidas" : "Recorre la estructura despacio · \(model.keyframes) fotos")
-                    .font(.callout).foregroundStyle(.white)
-                    .padding(10).background(model.tooFast ? .red.opacity(0.7) : .black.opacity(0.5), in: Capsule())
+                Group {
+                    if let warning = model.warning {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.headline).foregroundStyle(.black)
+                            .background(.yellow, in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
+                    } else {
+                        Text(model.keyframes >= SpaceScanModel.maximumKeyframes
+                             ? "Ya hay fotos de sobra: puedes guardar"
+                             : "Recorre todo despacio. La malla marca lo ya escaneado · \(model.keyframes) fotos")
+                            .font(.callout).foregroundStyle(.white)
+                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16).inset(by: -10))
+                    }
+                }
+                .multilineTextAlignment(.center).padding(.horizontal, 30)
+                .animation(.spring, value: model.warning)
                     .padding(.top, 70)
             }
             .sensoryFeedback(.impact(weight: .light), trigger: model.keyframes)
-            .sensoryFeedback(trigger: model.tooFast) { _, fast in fast ? .warning : nil }
-            .scanChrome(confirmClose: model.keyframes > 0) {
+            .sensoryFeedback(.warning, trigger: model.warning) { _, new in new != nil }
+            .scanChrome(confirmClose: model.keyframes > 0, closeDisabled: saving) {
                 if saving {
                     ProgressView("Guardando…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                 } else {
-                    Button("Guardar") {
+                    Button(model.keyframes < SpaceScanModel.minimumKeyframes ? "Faltan \(SpaceScanModel.minimumKeyframes - model.keyframes) fotos" : "Guardar") {
                         saving = true
                         Task {
                             do {
                                 try await model.save()
-                                dismiss()
                             } catch {
                                 self.error = error.localizedDescription
+                                saving = false
+                                return
+                            }
+                            // La malla y el zip ya están guardados: si el splat falla, no se pierde nada.
+                            do {
+                                try await model.trainSplat()
+                                dismiss()
+                            } catch {
+                                dismissAfterAlert = true
+                                self.error = "La malla y las fotos se guardaron, pero no se pudo crear la versión fotorrealista: \(error.localizedDescription)"
                             }
                             saving = false
                         }
                     }
+                    .disabled(model.keyframes < SpaceScanModel.minimumKeyframes)
                 }
             }
             .onAppear { model.start() }
             .onDisappear { model.stop() }
-            .alert("No se pudo guardar", isPresented: .constant(error != nil)) {
-                Button("OK") { error = nil }
+            .overlay {
+                if let progress = model.splatProgress {
+                    SplatProgressView(progress: progress) { model.cancelSplat() }
+                }
+            }
+            .alert("Aviso", isPresented: .constant(error != nil)) {
+                Button("OK") { error = nil; if dismissAfterAlert { dismiss() } }
             } message: { Text(error ?? "") }
     }
+}
+
+/// Pantalla mientras se entrena el splat en el iPhone.
+private struct SplatProgressView: View {
+    let progress: Double
+    let skip: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.85).ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image(systemName: "sparkles").font(.system(size: 44)).foregroundStyle(.pink)
+                Text("Creando la versión fotorrealista").font(.title3.bold())
+                ProgressView(value: progress).tint(.pink).frame(maxWidth: 260)
+                Text("\(Int(progress * 100)) % · Tarda unos minutos. Deja el iPhone con la app abierta.")
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Saltar (la malla ya está guardada)", action: skip).buttonStyle(.bordered).padding(.top, 8)
+            }
+            .foregroundStyle(.white).padding(32)
+        }
+    }
+}
+
+/// Bandera compartida con el hilo de entrenamiento.
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var value: Bool { lock.withLock { cancelled } }
+    func cancel() { lock.withLock { cancelled = true } }
 }
 
 @MainActor
@@ -52,6 +109,14 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     let arView = ARView(frame: .zero)
     @Published var keyframes = 0
     @Published var tooFast = false
+    /// Lo que impide un buen escaneo ahora mismo (velocidad, luz, tracking), en lenguaje claro.
+    @Published var warning: String?
+    /// Avance del entrenamiento del splat (nil = no se está entrenando).
+    @Published var splatProgress: Double?
+    private let splatCancel = CancelFlag()
+    static let minimumKeyframes = 8
+    /// Tope de fotos: más no mejora el resultado y llenaría memoria y disco (~5 MB por foto).
+    static let maximumKeyframes = 400
 
     private let work = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     private var frames: [[String: Any]] = []
@@ -60,11 +125,11 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     private var colorViews: [ColorView] = []
     private var previous: (pose: simd_float4x4, time: TimeInterval)?
     private var speed: Float = 0, turnRate: Float = 0
+    private let config = ARWorldTrackingConfiguration()
 
     func start() {
         try? FileManager.default.createDirectory(at: work.appending(path: "images"), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: work.appending(path: "depth"), withIntermediateDirectories: true)
-        let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { config.frameSemantics.insert(.sceneDepth) }
         if let format = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
@@ -95,14 +160,29 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             let fast = speed > 0.6 || turnRate > .pi / 2   // > 0,6 m/s o > 90°/s
             if fast != tooFast { tooFast = fast }
         }
+        let warning = Self.warning(for: frame, tooFast: tooFast)
+        if warning != self.warning { self.warning = warning }
         previous = (pose, frame.timestamp)
         considerKeyframe(frame)
+    }
+
+    private static func warning(for frame: ARFrame, tooFast: Bool) -> String? {
+        switch frame.camera.trackingState {
+        case .limited(.excessiveMotion): return "Más despacio"
+        case .limited(.insufficientFeatures): return "Apunta a zonas con más detalle"
+        case .limited(.initializing), .limited(.relocalizing): return "Mueve el iPhone despacio para empezar"
+        case .notAvailable: return "Esperando a la cámara…"
+        default: break
+        }
+        if tooFast { return "Más despacio: las fotos salen movidas" }
+        if let light = frame.lightEstimate?.ambientIntensity, light < 250 { return "Poca luz: enciende las luces" }
+        return nil
     }
 
     /// Nueva foto cada 10 cm o ~10° de giro, solo con tracking bueno, sin ir rápido y de una en una.
     private func considerKeyframe(_ frame: ARFrame) {
         let pose = frame.camera.transform
-        guard case .normal = frame.camera.trackingState, !capturing, !tooFast else { return }
+        guard case .normal = frame.camera.trackingState, !capturing, !tooFast, frames.count < Self.maximumKeyframes else { return }
         if let last = lastPose {
             let moved = simd_distance(last.columns.3, pose.columns.3)
             let forward = simd_dot(simd_normalize(last.columns.2), simd_normalize(pose.columns.2))
@@ -111,12 +191,11 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         capturing = true
         lastPose = pose
         if let view = Dataset.colorView(from: frame, width: 192) { colorViews.append(view) }
-        let depth = frame.sceneDepth
         let index = frames.count
         let work = self.work
         arView.session.captureHighResolutionFrame { [weak self] frame, _ in
             Task.detached {
-                let entry = frame.flatMap { try? Dataset.write($0, depth: depth, index: index, to: work) }
+                let entry = frame.flatMap { try? Dataset.write($0, index: index, to: work) }
                 await MainActor.run {
                     if let entry {
                         self?.frames.append(entry)
@@ -129,7 +208,16 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func save() async throws {
+        // Que termine la foto que se esté guardando, para no meter una a medias en el zip.
+        for _ in 0..<20 where capturing { try? await Task.sleep(for: .milliseconds(100)) }
         arView.session.pause()
+        do { try await export() } catch {
+            arView.session.run(config)  // si falla, la cámara sigue viva para reintentar
+            throw error
+        }
+    }
+
+    private func export() async throws {
         let anchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         guard !anchors.isEmpty || !frames.isEmpty else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Aún no hay nada escaneado. Mueve el iPhone sobre la zona."])
@@ -142,10 +230,10 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         let json = try JSONSerialization.data(withJSONObject: meta, options: .prettyPrinted)
         let hasFrames = !frames.isEmpty
 
-        // shortcut: colorear recorre vértices × vistas en CPU (segundos en escaneos grandes); pasar a Metal si se queda corto.
+        // shortcut: colorear recorre vértices × vistas en CPU (en paralelo); pasar a Metal si se queda corto.
         try await Task.detached {
             if !positions.isEmpty {
-                let colors = positions.map { MeshColor.color(of: $0, in: views) ?? SIMD3(160, 160, 160) }
+                let colors = MeshColor.colors(of: positions, in: views)
                 let ply = MeshColor.plyData(positions: positions, colors: colors, indices: indices)
                 try ply.write(to: Scans.newURL("Espacio", ext: "ply"))
                 if hasFrames { try ply.write(to: work.appending(path: "mesh.ply")) }
@@ -156,6 +244,24 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             }
         }.value
     }
+
+    /// Gaussian splat fotorrealista entrenado en el iPhone con las fotos, las poses de ARKit y la malla en color.
+    func trainSplat() async throws {
+        let hasMesh = FileManager.default.fileExists(atPath: work.appending(path: "mesh.ply").path)
+        let (folder, downscale) = try SplatTrainer.prepare(dataset: work, frames: frames, hasMesh: hasMesh)
+        let output = Scans.newURL("Espacio splat", ext: "ply")
+        let cancel = splatCancel
+        splatProgress = 0
+        defer { splatProgress = nil }
+        _ = try await Task.detached(priority: .userInitiated) {
+            try SplatTrainer.train(folder: folder, downscale: downscale, output: output, isCancelled: { cancel.value }) { progress in
+                // Tras terminar (splatProgress = nil) se ignoran avisos rezagados.
+                Task { @MainActor in if self.splatProgress != nil { self.splatProgress = progress } }
+            }
+        }.value
+    }
+
+    func cancelSplat() { splatCancel.cancel() }
 
     /// Une las mallas de todos los anclajes en coordenadas del mundo.
     static func mesh(from anchors: [ARMeshAnchor]) -> (positions: [SIMD3<Float>], indices: [UInt32]) {

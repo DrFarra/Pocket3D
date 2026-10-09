@@ -8,8 +8,8 @@ enum Dataset {
     private static let context = CIContext()
 
     /// Guarda foto + profundidad LiDAR de un fotograma y devuelve su entrada de transforms.json (formato nerfstudio).
-    /// `fallbackDepth`: la del fotograma normal, por si el de alta resolución no trae profundidad.
-    static func write(_ frame: ARFrame, depth fallbackDepth: ARDepthData?, index: Int, to folder: URL) throws -> [String: Any] {
+    /// La profundidad solo se guarda si viene en el mismo fotograma: la de otro instante no cuadraría con la foto.
+    static func write(_ frame: ARFrame, index: Int, to folder: URL) throws -> [String: Any] {
         let name = String(format: "%05d", index)
         let image = CIImage(cvPixelBuffer: frame.capturedImage)
         guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -26,7 +26,7 @@ enum Dataset {
             "fl_x": k[0][0], "fl_y": k[1][1], "cx": k[2][0], "cy": k[2][1],
             "w": Int(frame.camera.imageResolution.width), "h": Int(frame.camera.imageResolution.height),
         ]
-        if let depth = frame.sceneDepth ?? fallbackDepth, let png = depthPNG(depth) {
+        if let depth = frame.sceneDepth, let png = depthPNG(depth) {
             try png.write(to: folder.appending(path: "depth/\(name).png"))
             entry["depth_file_path"] = "depth/\(name).png"
         }

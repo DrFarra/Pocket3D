@@ -32,6 +32,11 @@ moved.columns.3 = [0, 0, 1, 1]   // cámara 1 m más atrás: la pared queda a 3 
 check(MeshColor.color(of: [0, -0.5, -2], in: [split, view(color: { _ in [0, 0, 255] }, transform: moved)]) == [255, 0, 0],
       "una vista cuya profundidad no cuadra se descarta y se usa la anterior")
 
+// El coloreado en paralelo da lo mismo que punto a punto (10 000 puntos → varios bloques e hilos).
+let many = (0..<10_000).map { i in SIMD3<Float>(Float(i % 100) / 100 - 0.5, Float(i / 100) / 100 - 0.5, -2) }
+let parallel = MeshColor.colors(of: many, in: [split])
+check(parallel == many.map { MeshColor.color(of: $0, in: [split]) ?? SIMD3(160, 160, 160) }, "colorear en paralelo = colorear uno a uno")
+
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
 let colors: [SIMD3<UInt8>] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]
