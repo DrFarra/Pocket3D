@@ -102,7 +102,7 @@ struct ObjectScanView: View {
                     .tint(.white).foregroundStyle(.white).padding(40)
             }
         }
-        .scanChrome {
+        .scanChrome(confirmClose: model.session != nil || (model.progress != nil && !model.done && model.error == nil)) {
             if model.done || model.error != nil { Button("Listo") { dismiss() } }
         }
         .task { model.start() }
@@ -127,7 +127,7 @@ private struct CaptureControls: View {
                     Button("Empezar captura") { session.startCapturing() }
                 case .capturing:
                     if session.userCompletedScanPass {
-                        Button("Otra vuelta") { session.beginNewScanPass() }
+                        Button("Otra vuelta") { session.beginNewScanPass() }.buttonStyle(.bordered)
                     }
                     Button("Terminar (\(session.numberOfShotsTaken) fotos)") { session.finish() }
                 default:

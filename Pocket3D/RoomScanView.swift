@@ -13,12 +13,12 @@ struct RoomScanView: View {
     var body: some View {
         RoomCaptureRepresentable(controller: controller)
             .ignoresSafeArea()
-            .scanChrome {
+            .scanChrome(confirmClose: controller.isScanning || controller.room != nil || !controller.rooms.isEmpty) {
                 if saving {
                     ProgressView("Uniendo habitaciones…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                 } else if let room = controller.room {
                     HStack {
-                        Button("Otra habitación") { controller.nextRoom() }
+                        Button("Otra habitación", systemImage: "plus") { controller.nextRoom() }.buttonStyle(.bordered)
                         Button(controller.rooms.isEmpty ? "Guardar" : "Guardar (\(controller.rooms.count + 1))") { save(adding: room) }
                     }
                 } else if controller.isScanning {

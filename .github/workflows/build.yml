@@ -41,6 +41,13 @@ jobs:
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid"
           xcrun simctl install "$udid" build/Build/Products/Debug-iphonesimulator/Pocket3D.app
+          # Escaneos de ejemplo para que la captura muestre la biblioteca.
+          scans="$(xcrun simctl get_app_container "$udid" com.drfarra.Pocket3D data)/Documents/Scans"
+          mkdir -p "$scans"
+          for f in "2026-10-09 10.00.00 Objeto.usdz" "2026-10-09 10.00.00 Objeto fotos.zip" "2026-10-09 11.30.00 Plano 3 habitaciones.usdz" \
+                   "2026-10-09 12.00.00 Espacio.ply" "2026-10-09 12.00.00 Espacio dataset.zip"; do
+            head -c 250000 /dev/zero > "$scans/$f"
+          done
           xcrun simctl launch "$udid" com.drfarra.Pocket3D
           sleep 15
           xcrun simctl io "$udid" screenshot home.png

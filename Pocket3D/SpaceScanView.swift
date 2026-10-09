@@ -19,7 +19,9 @@ struct SpaceScanView: View {
                     .padding(10).background(model.tooFast ? .red.opacity(0.7) : .black.opacity(0.5), in: Capsule())
                     .padding(.top, 70)
             }
-            .scanChrome {
+            .sensoryFeedback(.impact(weight: .light), trigger: model.keyframes)
+            .sensoryFeedback(trigger: model.tooFast) { _, fast in fast ? .warning : nil }
+            .scanChrome(confirmClose: model.keyframes > 0) {
                 if saving {
                     ProgressView("Guardando…").padding().background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                 } else {

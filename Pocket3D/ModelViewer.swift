@@ -18,6 +18,7 @@ struct ModelViewer: View {
                     SplatViewer(url: url)
                 } else if let scene = Self.meshScene(url) {
                     SceneView(scene: scene, options: [.allowsCameraControl, .autoenablesDefaultLighting])
+                        .overlay(alignment: .bottom) { GestureHint(text: "Arrastra para girar · Pellizca para acercar · Dos dedos para mover") }
                 } else {
                     ContentUnavailableView("No se puede abrir", systemImage: "questionmark.square.dashed",
                                            description: Text(url.lastPathComponent))
@@ -87,6 +88,33 @@ private struct SplatViewer: View {
                 }
                 .onEnded { _ in startCamera = nil })
             .onTapGesture(count: 2) { camera.orientation = (camera.orientation + 1) % OrbitCamera.orientations.count }
+            .overlay(alignment: .bottom) { GestureHint(text: "Arrastra para girar · Pellizca para acercar · Doble toque si sale torcido") }
+            .overlay(alignment: .topTrailing) {
+                Button { withAnimation { camera = OrbitCamera(orientation: camera.orientation) } } label: {
+                    Image(systemName: "scope").font(.title2).padding(12).background(.ultraThinMaterial, in: Circle())
+                }
+                .padding().accessibilityLabel("Centrar vista")
+            }
+    }
+}
+
+/// Indicación de gestos que se desvanece sola a los pocos segundos.
+private struct GestureHint: View {
+    let text: String
+    @State private var visible = true
+
+    var body: some View {
+        Text(text)
+            .font(.footnote).multilineTextAlignment(.center)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.bottom, 30).padding(.horizontal)
+            .opacity(visible ? 1 : 0)
+            .allowsHitTesting(false)
+            .task {
+                try? await Task.sleep(for: .seconds(4))
+                withAnimation(.easeOut(duration: 0.6)) { visible = false }
+            }
     }
 }
 
