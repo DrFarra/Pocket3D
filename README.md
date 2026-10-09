@@ -12,8 +12,8 @@ Escáner 3D para iPhone con LiDAR (pensado para el 17 Pro Max) + procesado de m�
 
 En «Mis escaneos» toca cualquier escaneo:
 
-- **Objeto / Habitación (USDZ)**: vista 3D y botón de **realidad aumentada** para ponerlo en tu mesa o tu suelo.
-- **Espacio (PLY en color)**: visor 3D propio; arrastra para girar, pellizca para zoom.
+- **Objeto (USDZ)**: vista 3D y botón de **realidad aumentada** para ponerlo en tu mesa.
+- **Habitación (USDZ) y Espacio (PLY en color)**: visor propio que se abre **por dentro**: estás parado en el centro, arrastra para mirar alrededor y pellizca para avanzar. Arriba eliges *Por fuera* para girarlo como maqueta.
 - **Espacio splat**: la versión fotorrealista hecha en el iPhone (motor [msplat](https://github.com/rayanht/msplat) sobre Metal, con las poses de ARKit y la malla LiDAR como punto de partida).
 - **Gaussian splats hechos en el PC** (`.ply` / `.spz` / `.splat` de Postshot o nerfstudio): botón **Importar del PC** (arriba a la derecha) y tócalo para verlo fotorrealista en el iPhone. Arrastra para girar, pellizca para zoom y **doble toque** si sale torcido (cambia qué eje es "arriba").
 - **Mallas del PC** (`.obj` / `.ply` / `.stl` de RealityScan): igual, con *Importar del PC*.
@@ -28,6 +28,18 @@ Todo está también en **Archivos → En mi iPhone → Pocket3D → Scans** (pue
 4. En el iPhone: *Ajustes → General → VPN y gestión de dispositivos* → confía en tu Apple ID; y *Ajustes → Privacidad y seguridad → Modo de desarrollador* → activar (reinicia).
 
 Con un Apple ID gratuito la firma caduca a los 7 días: vuelve a pulsar *Start* en Sideloadly (no se pierden los escaneos). Con la cuenta de desarrollador de pago (99 $/año) dura un año.
+
+## Abrir en Blender
+
+Todos los modos dan un modelo que Blender (probado con 5.0) abre a escala real y derecho, sin tocar opciones:
+
+| Modo | Archivo | En Blender |
+|------|---------|------------|
+| Objeto | `… Objeto.usdz` | *Archivo → Importar → Universal Scene Description*: malla con textura |
+| Habitación | `… Habitación.usdz` / `… Plano N habitaciones.usdz` | *Archivo → Importar → Universal Scene Description* |
+| Espacio | `… Espacio para Blender.glb` | *Archivo → Importar → glTF 2.0*: malla con el color ya puesto en el material |
+
+El *Espacio splat* es un Gaussian splat: Blender no lo dibuja solo (hace falta un complemento de 3DGS). Para un objeto con más detalle que el USDZ del iPhone, procesa `… Objeto fotos.zip` en RealityScan ([PC.md](PC.md)) y exporta FBX/OBJ.
 
 ## Pasar los escaneos al PC
 

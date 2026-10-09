@@ -112,6 +112,48 @@ enum MeshColor {
         return data
     }
 
+    /// GLB (glTF binario) con color por vértice para Blender: entra derecho (Z arriba, en metros) y con el color ya
+    /// conectado al material. Probado con Blender 5.0: el PLY entra tumbado (asume Z arriba) y el OBJ sin material.
+    static func glbData(positions: [SIMD3<Float>], colors: [SIMD3<UInt8>], indices: [UInt32]) throws -> Data {
+        precondition(!positions.isEmpty && positions.count == colors.count && indices.count % 3 == 0)
+        var bin = Data()
+        bin.reserveCapacity(positions.count * 16 + indices.count * 4)
+        for p in positions {
+            for f in [p.x, p.y, p.z] { withUnsafeBytes(of: f.bitPattern.littleEndian) { bin.append(contentsOf: $0) } }
+        }
+        let colorOffset = bin.count
+        for c in colors { bin.append(contentsOf: [c.x, c.y, c.z, 255]) }  // RGBA: glTF exige cada color alineado a 4 bytes
+        let indexOffset = bin.count
+        for i in indices { withUnsafeBytes(of: i.littleEndian) { bin.append(contentsOf: $0) } }
+        let low = positions.reduce(positions[0]) { simd_min($0, $1) }, high = positions.reduce(positions[0]) { simd_max($0, $1) }
+
+        let json: [String: Any] = [
+            "asset": ["version": "2.0", "generator": "Pocket3D"],
+            "scene": 0, "scenes": [["nodes": [0]]], "nodes": [["mesh": 0, "name": "Pocket3D"]],
+            "meshes": [["primitives": [["attributes": ["POSITION": 0, "COLOR_0": 1], "indices": 2, "material": 0]]]],
+            "materials": [["doubleSided": true,
+                           "pbrMetallicRoughness": ["baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 1]]],
+            "buffers": [["byteLength": bin.count]],
+            "bufferViews": [["buffer": 0, "byteOffset": 0, "byteLength": colorOffset, "target": 34962],
+                            ["buffer": 0, "byteOffset": colorOffset, "byteLength": indexOffset - colorOffset, "target": 34962],
+                            ["buffer": 0, "byteOffset": indexOffset, "byteLength": bin.count - indexOffset, "target": 34963]],
+            "accessors": [["bufferView": 0, "componentType": 5126, "count": positions.count, "type": "VEC3",
+                           "min": [low.x, low.y, low.z], "max": [high.x, high.y, high.z]],
+                          ["bufferView": 1, "componentType": 5121, "normalized": true, "count": colors.count, "type": "VEC4"],
+                          ["bufferView": 2, "componentType": 5125, "count": indices.count, "type": "SCALAR"]],
+        ]
+        var header = try JSONSerialization.data(withJSONObject: json)
+        header.append(contentsOf: repeatElement(0x20, count: (4 - header.count % 4) % 4))  // los bloques miden múltiplos de 4
+        bin.append(contentsOf: repeatElement(0, count: (4 - bin.count % 4) % 4))
+
+        var glb = Data()
+        func word(_ value: Int) { withUnsafeBytes(of: UInt32(value).littleEndian) { glb.append(contentsOf: $0) } }
+        word(0x4654_6C67); word(2); word(12 + 8 + header.count + 8 + bin.count)   // "glTF", versión, tamaño total
+        word(header.count); word(0x4E4F_534A); glb.append(header)                 // bloque "JSON"
+        word(bin.count); word(0x004E_4942); glb.append(bin)                       // bloque "BIN"
+        return glb
+    }
+
     /// Los PLY de Gaussian splats llevan coeficientes de color esférico (f_dc_*); los de malla no.
     static func isGaussianSplatPLY(_ url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }

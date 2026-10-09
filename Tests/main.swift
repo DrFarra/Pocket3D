@@ -44,6 +44,15 @@ var gaps: [SIMD3<UInt8>?] = [[200, 0, 0], nil, nil, [0, 0, 100], nil]
 MeshColor.fillGaps(&gaps, indices: [0, 1, 3, 1, 2, 3])
 check(gaps[1] == [66, 0, 66] && gaps[2] == [0, 0, 100] && gaps[4] == nil, "rellenar huecos con el promedio de los vecinos")
 
+// GLB para Blender: cabecera, bloques alineados a 4 y vistas que cubren el binario (el formato lo verificó Blender 5.0).
+let glb = try! MeshColor.glbData(positions: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], colors: [[255, 0, 0], [0, 255, 0], [0, 0, 255]], indices: [0, 1, 2])
+func word(_ at: Int) -> Int { Int(glb[at]) | Int(glb[at + 1]) << 8 | Int(glb[at + 2]) << 16 | Int(glb[at + 3]) << 24 }
+let jsonLength = word(12)
+let gltf = try! JSONSerialization.jsonObject(with: glb[20..<20 + jsonLength]) as! [String: Any]
+let views = gltf["bufferViews"] as! [[String: Int]]
+check(word(0) == 0x4654_6C67 && word(8) == glb.count && jsonLength % 4 == 0 && word(20 + jsonLength) % 4 == 0, "GLB: cabecera y bloques válidos")
+check(views.map { $0["byteLength"]! } == [36, 12, 12] && word(20 + jsonLength) == 60, "GLB: posiciones, colores RGBA e índices en el binario")
+
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
 let colors: [SIMD3<UInt8>] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]
