@@ -107,7 +107,7 @@ struct ObjectScanView: View {
 }
 
 private struct CaptureControls: View {
-    @ObservedObject var session: ObjectCaptureSession
+    let session: ObjectCaptureSession // @Observable: SwiftUI la observa sola
 
     var body: some View {
         VStack {
