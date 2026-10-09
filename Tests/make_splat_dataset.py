@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 
 root = Path(sys.argv[1]); (root / "images").mkdir(parents=True, exist_ok=True)
-W, H, f = 160, 120, 140.0
+W, H, f = 640, 480, 560.0  # tamaño parecido al de entrenamiento en la app (~800 px)
 faces_col = np.array([[230, 60, 60], [60, 200, 90], [60, 90, 230], [240, 200, 40], [200, 60, 220], [40, 210, 220]], float)
 
 def render(c2w):
