@@ -72,9 +72,15 @@ struct ModelViewer: View {
 /// Gaussian splat con MetalSplatter. Arrastra para girar, pellizca para acercar, doble toque para cambiar qué eje es "arriba".
 private struct SplatViewer: View {
     let url: URL
-    @State private var camera = OrbitCamera()
+    @State private var camera: OrbitCamera
     @State private var startCamera: OrbitCamera?
     @State private var error: String?
+
+    init(url: URL) {
+        self.url = url
+        // Los splats entrenados en la app conservan el "arriba" de ARKit (Y); los del PC suelen venir con Y hacia abajo.
+        _camera = State(initialValue: OrbitCamera(orientation: OrbitCamera.trainedHere(url) ? 2 : 0))
+    }
 
     var body: some View {
         SplatMetalView(url: url, camera: camera, error: $error)
@@ -133,6 +139,8 @@ struct OrbitCamera {
     var yaw: Float = 0, pitch: Float = 0.2, zoom: Float = 1
     /// Cada herramienta deja el "arriba" en un eje distinto; doble toque prueba el siguiente.
     var orientation = 0
+
+    static func trainedHere(_ url: URL) -> Bool { url.lastPathComponent.hasSuffix("Espacio splat.ply") }
     static let orientations: [simd_quatf] = [
         simd_quatf(angle: .pi, axis: [0, 0, 1]),        // COLMAP / Postshot: Y hacia abajo
         simd_quatf(angle: -.pi / 2, axis: [1, 0, 0]),   // nerfstudio: Z hacia arriba

@@ -10,6 +10,7 @@ struct SpaceScanView: View {
     @State private var error: String?
     @State private var saving = false
     @State private var dismissAfterAlert = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ARViewRepresentable(arView: model.arView)
@@ -62,6 +63,7 @@ struct SpaceScanView: View {
                     .disabled(model.keyframes < SpaceScanModel.minimumKeyframes)
                 }
             }
+            .onChange(of: scenePhase) { _, phase in model.pauseSplat(phase != .active) }
             .onAppear { model.start() }
             .onDisappear { model.stop() }
             .overlay {
@@ -100,8 +102,11 @@ private struct SplatProgressView: View {
 private final class CancelFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var paused = false
     var value: Bool { lock.withLock { cancelled } }
+    var isPaused: Bool { lock.withLock { paused } }
     func cancel() { lock.withLock { cancelled = true } }
+    func setPaused(_ value: Bool) { lock.withLock { paused = value } }
 }
 
 @MainActor
@@ -254,7 +259,8 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
         splatProgress = 0
         defer { splatProgress = nil }
         _ = try await Task.detached(priority: .userInitiated) {
-            try SplatTrainer.train(folder: folder, downscale: downscale, output: output, isCancelled: { cancel.value }) { progress in
+            try SplatTrainer.train(folder: folder, downscale: downscale, output: output,
+                                   isCancelled: { cancel.value }, isPaused: { cancel.isPaused }) { progress in
                 // Tras terminar (splatProgress = nil) se ignoran avisos rezagados.
                 Task { @MainActor in if self.splatProgress != nil { self.splatProgress = progress } }
             }
@@ -262,6 +268,8 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func cancelSplat() { splatCancel.cancel() }
+    /// iOS no deja usar la GPU en segundo plano: si sales de la app, el entrenamiento espera a que vuelvas.
+    func pauseSplat(_ paused: Bool) { splatCancel.setPaused(paused) }
 
     /// Une las mallas de todos los anclajes en coordenadas del mundo.
     static func mesh(from anchors: [ARMeshAnchor]) -> (positions: [SIMD3<Float>], indices: [UInt32]) {
