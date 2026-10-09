@@ -35,7 +35,7 @@ enum SplatTrainer {
 
     /// Entrena y guarda el splat en `output`. Devuelve false si se canceló.
     static func train(folder: URL, downscale: Float, output: URL,
-                      isCancelled: () -> Bool, progress: (Double) -> Void) throws -> Bool {
+                      isCancelled: () -> Bool, isPaused: () -> Bool, progress: (Double) -> Void) throws -> Bool {
         guard let metallib = Bundle.main.path(forResource: "default", ofType: "metallib") else {
             throw Failure(errorDescription: "Falta el motor Metal de splats en la app.")
         }
@@ -50,6 +50,7 @@ enum SplatTrainer {
         var iteration: Int32 = 0
         while iteration < iterations {
             if isCancelled() { return false }
+            if isPaused() { usleep(200_000); continue }
             iteration = pocket_splat_step(trainer, &message, 512)
             if iteration < 0 { throw failure() }
             if iteration % 20 == 0 { progress(Double(iteration) / Double(iterations)) }

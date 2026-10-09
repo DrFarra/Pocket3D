@@ -37,6 +37,8 @@ PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *meta
         // El entrenamiento progresivo a baja resolución de msplat da splats borrosos y desplazados
         // (12 dB frente a 16 dB en la prueba sintética): se entrena siempre a la resolución elegida.
         config.numDownscales = 0;
+        // Exportar en metros reales y en las mismas coordenadas que la malla LiDAR (msplat normaliza al entrenar).
+        config.keepCrs = true;
         MsplatTrainer trainer = msplat_trainer_create(dataset, config);
         return new Session{dataset, trainer};
     } catch (const std::exception &e) {
