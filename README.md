@@ -36,7 +36,7 @@ Todos los modos dan un modelo que Blender (probado con 5.0) abre a escala real y
 | Modo | Archivo | En Blender |
 |------|---------|------------|
 | Objeto | `… Objeto.usdz` | *Archivo → Importar → Universal Scene Description*: malla con textura |
-| Habitación | `… Habitación.usdz` / `… Plano N habitaciones.usdz` | *Archivo → Importar → Universal Scene Description* |
+| Habitación | `… Habitación para Blender.glb` / `… Plano para Blender.glb` (o el `.usdz`) | *Archivo → Importar → glTF 2.0*: paredes, suelo, puertas, ventanas y muebles como cajas de color |
 | Espacio | `… Espacio para Blender.glb` | *Archivo → Importar → glTF 2.0*: malla con el color ya puesto en el material |
 
 El *Espacio splat* es un Gaussian splat: Blender no lo dibuja solo (hace falta un complemento de 3DGS). Para un objeto con más detalle que el USDZ del iPhone, procesa `… Objeto fotos.zip` en RealityScan ([PC.md](PC.md)) y exporta FBX/OBJ.

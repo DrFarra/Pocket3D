@@ -53,6 +53,12 @@ let views = gltf["bufferViews"] as! [[String: Int]]
 check(word(0) == 0x4654_6C67 && word(8) == glb.count && jsonLength % 4 == 0 && word(20 + jsonLength) % 4 == 0, "GLB: cabecera y bloques válidos")
 check(views.map { $0["byteLength"]! } == [36, 12, 12] && word(20 + jsonLength) == 60, "GLB: posiciones, colores RGBA e índices en el binario")
 
+var shifted = matrix_identity_float4x4
+shifted.columns.3 = [10, 0, 0, 1]
+let box = MeshColor.boxes([(shifted, [2, 4, 6], [1, 2, 3])])
+check(box.positions.count == 8 && box.indices.count == 36 && box.positions.contains([11, 2, 3]) && box.positions.contains([9, -2, -3])
+      && Set(box.indices).count == 8, "caja de RoomPlan: 8 esquinas en su sitio y 12 triángulos")
+
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]
 let colors: [SIMD3<UInt8>] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]

@@ -50,16 +50,41 @@ struct RoomScanView: View {
 
     @State private var savedSeparately = false
 
+    /// Extra para Blender (si falla, el USDZ ya está guardado): el mismo GLB que el modo Espacio, con cada elemento
+    /// como una caja de color.
+    private static func writeBlender(walls: [CapturedRoom.Surface], doors: [CapturedRoom.Surface], windows: [CapturedRoom.Surface],
+                                     openings: [CapturedRoom.Surface], floors: [CapturedRoom.Surface], objects: [CapturedRoom.Object],
+                                     name: String) throws {
+        // Las paredes y suelos son planos (grosor 0): 4 cm. Puertas y ventanas un poco más gruesas para que asomen.
+        func boxes(_ surfaces: [CapturedRoom.Surface], depth: Float, color: SIMD3<UInt8>) -> [(transform: simd_float4x4, size: SIMD3<Float>, color: SIMD3<UInt8>)] {
+            surfaces.map { ($0.transform, simd_max($0.dimensions, SIMD3(repeating: depth)), color) }
+        }
+        let items = boxes(walls, depth: 0.04, color: [225, 222, 215]) + boxes(floors, depth: 0.04, color: [170, 150, 125])
+            + boxes(doors, depth: 0.08, color: [140, 95, 55]) + boxes(windows, depth: 0.08, color: [150, 200, 235])
+            + boxes(openings, depth: 0.08, color: [70, 70, 70])
+            + objects.map { ($0.transform, simd_max($0.dimensions, SIMD3(repeating: 0.02)), SIMD3<UInt8>(110, 135, 190)) }
+        guard !items.isEmpty else { return }
+        let mesh = MeshColor.boxes(items)
+        try MeshColor.glbData(positions: mesh.positions, colors: mesh.colors, indices: mesh.indices, unlit: false)
+            .write(to: Scans.newURL(name, ext: "glb"))
+    }
+
     private func save(_ rooms: [CapturedRoom]) {
         saving = true
         Task {
             do {
                 if rooms.count == 1 {
                     try rooms[0].export(to: Scans.newURL("Habitación", ext: "usdz"))
+                    try? Self.writeBlender(walls: rooms[0].walls, doors: rooms[0].doors, windows: rooms[0].windows,
+                                          openings: rooms[0].openings, floors: rooms[0].floors, objects: rooms[0].objects,
+                                          name: "Habitación para Blender")
                 } else {
                     do {
                         let structure = try await StructureBuilder(options: [.beautifyObjects]).capturedStructure(from: rooms)
                         try structure.export(to: Scans.newURL("Plano \(rooms.count) habitaciones", ext: "usdz"))
+                        try? Self.writeBlender(walls: structure.walls, doors: structure.doors, windows: structure.windows,
+                                              openings: structure.openings, floors: structure.floors, objects: structure.objects,
+                                              name: "Plano para Blender")
                     } catch {
                         // No se pudieron unir (p. ej. el tracking se perdió entre habitaciones): que no se pierda ninguna.
                         for (i, room) in rooms.enumerated() { try room.export(to: Scans.newURL("Habitación \(i + 1)", ext: "usdz")) }
