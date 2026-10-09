@@ -26,7 +26,10 @@ check(MeshColor.color(of: [0, 0, -3], in: [split]) == nil, "punto tapado por la 
 check(MeshColor.color(of: [0, 0, 2], in: [split]) == nil, "punto detrás de la cámara no se colorea")
 check(MeshColor.color(of: [5, 0, -2], in: [split]) == nil, "punto fuera de la imagen no se colorea")
 let blue = view { _ in [0, 0, 255] }
-check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [127, 0, 127], "mezcla las vistas que ven el punto")
+check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue]) == [128, 0, 128], "mezcla las vistas que ven el punto")
+check(MeshColor.color(of: [0, -0.5, -2], normal: [0, 0, 1], in: [split]) == [255, 0, 0], "superficie de frente se colorea")
+check(MeshColor.color(of: [0, -0.5, -2], normal: [1, 0, 0], in: [split]) == nil, "superficie vista de canto no se colorea")
+check(MeshColor.color(of: [0.97, 0, -2], in: [split]) == nil, "el borde de la foto no se usa")
 check(MeshColor.color(of: [0, -0.5, -2], in: [split, blue], blend: 1) == [0, 0, 255], "con blend 1 gana la vista más reciente")
 check(MeshColor.color(of: [0, -0.5, -2], in: [split] + Array(repeating: blue, count: 4)) == [0, 0, 255], "solo mezcla las 4 más recientes")
 var moved = matrix_identity_float4x4
@@ -58,6 +61,31 @@ shifted.columns.3 = [10, 0, 0, 1]
 let box = MeshColor.boxes([(shifted, [2, 4, 6], [1, 2, 3])])
 check(box.positions.count == 8 && box.indices.count == 36 && box.positions.contains([11, 2, 3]) && box.positions.contains([9, -2, -3])
       && Set(box.indices).count == 8, "caja de RoomPlan: 8 esquinas en su sitio y 12 triángulos")
+
+// Limpieza: dos bloques con el borde duplicado se sueldan en uno; un triángulo suelto (ruido) se va.
+let blockA: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0]], blockB: [SIMD3<Float>] = [[1, 0, 0], [1, 1, 0], [0, 1, 0]]
+let speck: [SIMD3<Float>] = [[5, 5, 5], [5.1, 5, 5], [5, 5.1, 5]]
+let cleaned = MeshColor.clean(positions: blockA + blockB + speck, indices: [0, 1, 2, 3, 4, 5, 6, 7, 8], minimumTriangles: 2)
+check(cleaned.positions.count == 4 && cleaned.indices.count == 6, "soldar bloques de ARKit y quitar fragmentos sueltos")
+check(MeshColor.clean(positions: speck, indices: [0, 1, 2]).indices.count == 3, "nunca se borra la pieza más grande")
+let normals = MeshColor.normals(of: blockA, indices: [0, 1, 2])
+check(normals[0].map { abs($0.z) > 0.99 } == true, "normal del triángulo en el plano XY = eje Z")
+
+// Splat: se quitan las gaussianas lejos de la superficie, pero nunca más de la mitad.
+func splatPLY(_ points: [SIMD3<Float>]) -> URL {
+    var data = Data("ply\nformat binary_little_endian 1.0\nelement vertex \(points.count)\nproperty float x\nproperty float y\nproperty float z\nproperty float opacity\nend_header\n".utf8)
+    for p in points { for f in [p.x, p.y, p.z, 1] { withUnsafeBytes(of: f) { data.append(contentsOf: $0) } } }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".ply")
+    try! data.write(to: url)
+    return url
+}
+let surface = MeshColor.occupiedCells([[0, 0, 0], [1, 0, 0]], cell: 0.15)
+let splat = splatPLY([[0.05, 0, 0], [1.1, 0.1, 0], [0.5, 3, 0]])
+check((try? MeshColor.pruneSplat(at: splat, near: surface, cell: 0.15)) == 1, "quita la gaussiana flotante")
+let pruned = try! Data(contentsOf: splat)
+check(String(decoding: pruned.prefix(80), as: UTF8.self).contains("element vertex 2\n") && pruned.count == 138 + 2 * 16, "PLY reescrito con 2 gaussianas")
+let lost = splatPLY([[9, 9, 9], [8, 8, 8], [0, 0, 0]])
+check((try? MeshColor.pruneSplat(at: lost, near: surface, cell: 0.15)) == 0, "si quitaría más de la mitad, no toca nada")
 
 // PLY coloreado → ModelIO → SceneKit (lo que hace el visor de la app).
 let positions: [SIMD3<Float>] = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]

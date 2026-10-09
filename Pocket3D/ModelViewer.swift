@@ -145,24 +145,26 @@ private struct CameraControls: ViewModifier {
     @Binding var camera: OrbitCamera
     let radius: Float
     let canFlip: Bool
-    @State private var start: OrbitCamera?
+    // Una base por gesto: si fuera compartida, al levantar un dedo del pellizco el arrastre se aplicaría dos veces.
+    @State private var dragStart: OrbitCamera?
+    @State private var pinchStart: OrbitCamera?
 
     func body(content: Content) -> some View {
         content
             .gesture(DragGesture()
                 .onChanged { value in
-                    let begin = start ?? camera
-                    start = begin
+                    let begin = dragStart ?? camera
+                    dragStart = begin
                     // Por dentro se arrastra el mundo, como en una foto 360°: sentido contrario a girar alrededor.
                     let k: Float = camera.inside ? 0.005 : -0.01
                     camera.yaw = begin.yaw + k * Float(value.translation.width)
                     camera.pitch = min(1.5, max(-1.5, begin.pitch - k * Float(value.translation.height)))
                 }
-                .onEnded { _ in start = nil })
+                .onEnded { _ in dragStart = nil })
             .simultaneousGesture(MagnifyGesture()
                 .onChanged { value in
-                    let begin = start ?? camera
-                    start = begin
+                    let begin = pinchStart ?? camera
+                    pinchStart = begin
                     let scale = Float(value.magnification)
                     if camera.inside {
                         // Abrir los dedos = avanzar hacia donde miras, sin salir mucho del escaneo.
@@ -172,7 +174,7 @@ private struct CameraControls: ViewModifier {
                         camera.zoom = min(20, max(0.05, begin.zoom / scale))
                     }
                 }
-                .onEnded { _ in start = nil })
+                .onEnded { _ in pinchStart = nil })
             .onTapGesture(count: 2) {
                 if canFlip { camera.orientation = (camera.orientation + 1) % OrbitCamera.orientations.count }
             }

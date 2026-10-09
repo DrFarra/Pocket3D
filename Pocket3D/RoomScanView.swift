@@ -62,7 +62,9 @@ struct RoomScanView: View {
         let items = boxes(walls, depth: 0.04, color: [225, 222, 215]) + boxes(floors, depth: 0.04, color: [170, 150, 125])
             + boxes(doors, depth: 0.08, color: [140, 95, 55]) + boxes(windows, depth: 0.08, color: [150, 200, 235])
             + boxes(openings, depth: 0.08, color: [70, 70, 70])
-            + objects.map { ($0.transform, simd_max($0.dimensions, SIMD3(repeating: 0.02)), SIMD3<UInt8>(110, 135, 190)) }
+            // Los muebles de confianza baja suelen ser fantasmas (reflejos, sombras): fuera.
+            + objects.filter { $0.confidence != .low }
+                .map { ($0.transform, simd_max($0.dimensions, SIMD3(repeating: 0.02)), SIMD3<UInt8>(110, 135, 190)) }
         guard !items.isEmpty else { return }
         let mesh = MeshColor.boxes(items)
         try MeshColor.glbData(positions: mesh.positions, colors: mesh.colors, indices: mesh.indices, unlit: false)
@@ -157,7 +159,8 @@ final class RoomCaptureController: UIViewController, ObservableObject, RoomCaptu
     }
 
     nonisolated func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
-        Task { @MainActor in self.room = processedResult }
+        // Con error el resultado puede venir a medias (paredes sueltas): mejor ofrecer reintentar que guardarlo.
+        Task { @MainActor in if error == nil { self.room = processedResult } else { self.processingFailed = true } }
     }
 }
 

@@ -65,23 +65,33 @@ final class ObjectScanModel: ObservableObject {
         await exportPhotos()
         guard !cancelled else { return cleanUp() }
         progress = 0
-        do {
-            var config = PhotogrammetrySession.Configuration()
-            config.checkpointDirectory = checkpoint
-            let photogrammetry = try PhotogrammetrySession(input: images, configuration: config)
-            self.photogrammetry = photogrammetry
-            let output = Scans.newURL("Objeto", ext: "usdz")
-            try photogrammetry.process(requests: [.modelFile(url: output)])
-            for try await event in photogrammetry.outputs {
-                switch event {
-                case .requestProgress(_, let fraction): progress = fraction
-                case .requestError(_, let error): throw error
-                case .processingComplete: done = true
-                default: break
+        // Si falla (objeto liso, pocas texturas), se reintenta buscando más puntos de referencia: más lento, pero sale.
+        for sensitivity in [PhotogrammetrySession.Configuration.FeatureSensitivity.normal, .high] {
+            guard !cancelled else { break }
+            error = nil
+            do {
+                var config = PhotogrammetrySession.Configuration()
+                // El checkpoint de la captura vale para el primer intento; el reintento parte de cero con otra sensibilidad.
+                if sensitivity == .normal { config.checkpointDirectory = checkpoint }
+                config.sampleOrdering = .sequential   // las fotos guiadas van en orden: más rápido y más fiable
+                config.featureSensitivity = sensitivity
+                let photogrammetry = try PhotogrammetrySession(input: images, configuration: config)
+                self.photogrammetry = photogrammetry
+                let output = Scans.newURL("Objeto", ext: "usdz")
+                try photogrammetry.process(requests: [.modelFile(url: output)])
+                for try await event in photogrammetry.outputs {
+                    switch event {
+                    case .requestProgress(_, let fraction): progress = fraction
+                    case .requestError(_, let error): throw error
+                    case .processingComplete: done = true
+                    default: break
+                    }
                 }
+                if done { break }
+            } catch {
+                self.error = error.localizedDescription
+                progress = 0
             }
-        } catch {
-            self.error = error.localizedDescription
         }
         cleanUp()
     }
@@ -142,10 +152,12 @@ private struct CaptureControls: View {
     let session: ObjectCaptureSession // @Observable: SwiftUI la observa sola
     @Environment(\.scanPaused) private var paused
     @State private var reviewing = false
-    /// Se queda en true tras la primera vuelta completa (beginNewScanPass reinicia userCompletedScanPass).
-    @State private var passDone = false
+    /// Vueltas completas (beginNewScanPass reinicia userCompletedScanPass, por eso se cuentan aquí).
+    @State private var passes = 0
 
     private static let minimumShots = 25
+    /// Con una sola vuelta la parte de arriba y la de abajo quedan con huecos o derretidas.
+    private static let minimumPasses = 2
 
     var body: some View {
         ZStack {
@@ -180,7 +192,7 @@ private struct CaptureControls: View {
         .sensoryFeedback(.warning, trigger: warning) { _, new in new != nil }
         .sensoryFeedback(.success, trigger: session.userCompletedScanPass) { _, done in done }
         .task(id: "\(stateKey)-\(paused)") { if !paused { await startDetecting() } }
-        .onChange(of: session.userCompletedScanPass) { _, done in if done { passDone = true } }
+        .onChange(of: session.userCompletedScanPass) { _, done in if done { passes += 1 } }
     }
 
     @ViewBuilder private var buttons: some View {
@@ -201,15 +213,23 @@ private struct CaptureControls: View {
                     if session.userCompletedScanPass {
                         Button("Ver", systemImage: "eye") { session.pause(); reviewing = true }
                             .buttonStyle(.bordered).tint(.white)
-                        Button("Otra vuelta", systemImage: "arrow.triangle.2.circlepath") { session.beginNewScanPass() }
-                            .buttonStyle(.bordered).tint(.white)
+                        Menu {
+                            Button("Más alta o más baja", systemImage: "arrow.up.and.down") { session.beginNewScanPass() }
+                            // Para fotografiar la base: el objeto se tumba y la app sabe que se ha movido.
+                            Button("Dándole la vuelta al objeto", systemImage: "arrow.uturn.down") { session.beginNewScanPassAfterFlip() }
+                        } label: {
+                            Label("Otra vuelta", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(.bordered).tint(.white)
                     }
                     let missing = Self.minimumShots - session.numberOfShotsTaken
-                    Button(missing > 0 ? "Faltan \(missing) fotos" : passDone ? "Terminar (\(session.numberOfShotsTaken))" : "Completa la vuelta") {
+                    let ready = missing <= 0 && passes >= Self.minimumPasses
+                    Button(missing > 0 ? "Faltan \(missing) fotos" : ready ? "Terminar (\(session.numberOfShotsTaken))"
+                           : passes == 0 ? "Completa la vuelta" : "Da otra vuelta") {
                         session.finish()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(missing > 0 || !passDone)
+                    .disabled(!ready)
                 }
             default:
                 ProgressView().tint(.white).padding(.horizontal, 24)
@@ -247,7 +267,9 @@ private struct CaptureControls: View {
         case .detecting: "Pon el punto blanco sobre el objeto y espera a que la caja lo rodee entero. Luego toca «Fijar caja»"
         case .capturing where reviewing:
             "Esto es lo que lleva capturado. Gira con un dedo para mirarlo: donde no hay puntos, falta escanear"
-        case .capturing where session.userCompletedScanPass: "¡Vuelta completa! Da otra más alta o más baja, o termina"
+        case .capturing where session.userCompletedScanPass:
+            passes >= Self.minimumPasses ? "¡Listo! Otra vuelta mejora aún más el detalle, o termina"
+                : "¡Vuelta completa! Da otra más alta o más baja, o dale la vuelta al objeto para la base"
         case .capturing: "Camina despacio alrededor hasta llenar el anillo"
         default: "Preparando…"
         }
