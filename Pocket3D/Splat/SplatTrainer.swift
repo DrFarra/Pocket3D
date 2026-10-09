@@ -42,7 +42,7 @@ enum SplatTrainer {
         var message = [CChar](repeating: 0, count: 512)
         func failure() -> Failure { Failure(errorDescription: String(cString: message)) }
 
-        guard let trainer = pocket_splat_create(folder.path, metallib, Int32(iterations), downscale, &message, 512) else {
+        guard let trainer = pocket_splat_create(folder.path, metallib, Int32(iterations), downscale, false, &message, 512) else {
             throw failure()
         }
         defer { pocket_splat_destroy(trainer) }

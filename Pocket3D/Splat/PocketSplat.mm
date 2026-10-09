@@ -15,11 +15,11 @@ void report(char *error, int length, const char *what) {
 }
 
 PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *metallibPath, int iterations,
-                                       float downscale, char *error, int errorLength) {
+                                       float downscale, bool holdOutViews, char *error, int errorLength) {
     MsplatDataset dataset = nullptr;
     try {
         msplat_set_metallib_path(metallibPath);
-        dataset = msplat_dataset_create(datasetPath, downscale, false, 8);
+        dataset = msplat_dataset_create(datasetPath, downscale, holdOutViews, 8);
         if (!dataset || msplat_dataset_num_train(dataset) == 0) {
             if (dataset) msplat_dataset_destroy(dataset);
             report(error, errorLength, "El escaneo no tiene fotos válidas para entrenar.");
@@ -59,6 +59,14 @@ int pocket_splat_step(PocketSplatTrainer trainer, char *error, int errorLength) 
 
 int pocket_splat_count(PocketSplatTrainer trainer) {
     return msplat_trainer_splat_count(static_cast<Session *>(trainer)->trainer);
+}
+
+float pocket_splat_psnr(PocketSplatTrainer trainer) {
+    try {
+        return msplat_trainer_evaluate(static_cast<Session *>(trainer)->trainer).psnr;
+    } catch (...) {
+        return 0;
+    }
 }
 
 bool pocket_splat_export(PocketSplatTrainer trainer, const char *plyPath, char *error, int errorLength) {
