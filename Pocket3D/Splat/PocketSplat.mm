@@ -37,8 +37,9 @@ PocketSplatTrainer pocket_splat_create(const char *datasetPath, const char *meta
         config.warmupLength = (int)(500 * scale) > 0 ? (int)(500 * scale) : 1;
         config.stopScreenSizeAt = (int)(4000 * scale);
         config.shDegreeInterval = (int)(1000 * scale) > 0 ? (int)(1000 * scale) : 1;
-        // Reinicio de opacidad y poda de gaussianas enormes cada ~10 % del entrenamiento, como en el original.
-        config.resetAlphaEvery = (int)(30 * scale) > 0 ? (int)(30 * scale) : 1;
+        // resetAlphaEvery NO se escala: en msplat también marca la ventana de densificación
+        // (paso % (resetAlphaEvery·refineEvery) > fotos + refineEvery) y escalado la cerraba: 3000 gaussianas fijas y 25,7 dB
+        // frente a 13 000 y 29,4 dB sin escalar.
         config.bgColor[0] = config.bgColor[1] = config.bgColor[2] = 0.0f;
         // El entrenamiento progresivo a baja resolución de msplat da splats borrosos y desplazados
         // (12 dB frente a 16 dB en la prueba sintética): se entrena siempre a la resolución elegida.
