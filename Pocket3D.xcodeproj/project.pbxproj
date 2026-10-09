@@ -192,7 +192,26 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_OBJC_ARC = NO;
 				CODE_SIGN_STYLE = Automatic;
+				"EXCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]" = msplat_metal.metal;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"USE_MPS=1",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Pocket3D/Vendor/msplat/include",
+					"$(SRCROOT)/Pocket3D/Vendor/msplat/metal",
+					"$(SRCROOT)/Pocket3D/Vendor/msplat/third_party",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					MetalPerformanceShaders,
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "Pocket3D/Pocket3D-Bridging-Header.h";
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Pocket3D/Info.plist;
@@ -217,7 +236,26 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_OBJC_ARC = NO;
 				CODE_SIGN_STYLE = Automatic;
+				"EXCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]" = msplat_metal.metal;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"USE_MPS=1",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Pocket3D/Vendor/msplat/include",
+					"$(SRCROOT)/Pocket3D/Vendor/msplat/metal",
+					"$(SRCROOT)/Pocket3D/Vendor/msplat/third_party",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					MetalPerformanceShaders,
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "Pocket3D/Pocket3D-Bridging-Header.h";
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Pocket3D/Info.plist;

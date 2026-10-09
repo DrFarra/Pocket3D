@@ -9,6 +9,7 @@ struct SpaceScanView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
     @State private var saving = false
+    @State private var dismissAfterAlert = false
 
     var body: some View {
         ARViewRepresentable(arView: model.arView)
@@ -42,9 +43,18 @@ struct SpaceScanView: View {
                         Task {
                             do {
                                 try await model.save()
-                                dismiss()
                             } catch {
                                 self.error = error.localizedDescription
+                                saving = false
+                                return
+                            }
+                            // La malla y el zip ya están guardados: si el splat falla, no se pierde nada.
+                            do {
+                                try await model.trainSplat()
+                                dismiss()
+                            } catch {
+                                dismissAfterAlert = true
+                                self.error = "La malla y las fotos se guardaron, pero no se pudo crear la versión fotorrealista: \(error.localizedDescription)"
                             }
                             saving = false
                         }
@@ -54,10 +64,44 @@ struct SpaceScanView: View {
             }
             .onAppear { model.start() }
             .onDisappear { model.stop() }
-            .alert("No se pudo guardar", isPresented: .constant(error != nil)) {
-                Button("OK") { error = nil }
+            .overlay {
+                if let progress = model.splatProgress {
+                    SplatProgressView(progress: progress) { model.cancelSplat() }
+                }
+            }
+            .alert("Aviso", isPresented: .constant(error != nil)) {
+                Button("OK") { error = nil; if dismissAfterAlert { dismiss() } }
             } message: { Text(error ?? "") }
     }
+}
+
+/// Pantalla mientras se entrena el splat en el iPhone.
+private struct SplatProgressView: View {
+    let progress: Double
+    let skip: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.85).ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image(systemName: "sparkles").font(.system(size: 44)).foregroundStyle(.pink)
+                Text("Creando la versión fotorrealista").font(.title3.bold())
+                ProgressView(value: progress).tint(.pink).frame(maxWidth: 260)
+                Text("\(Int(progress * 100)) % · Tarda unos minutos. Deja el iPhone con la app abierta.")
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Saltar (la malla ya está guardada)", action: skip).buttonStyle(.bordered).padding(.top, 8)
+            }
+            .foregroundStyle(.white).padding(32)
+        }
+    }
+}
+
+/// Bandera compartida con el hilo de entrenamiento.
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var value: Bool { lock.withLock { cancelled } }
+    func cancel() { lock.withLock { cancelled = true } }
 }
 
 @MainActor
@@ -67,6 +111,9 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var tooFast = false
     /// Lo que impide un buen escaneo ahora mismo (velocidad, luz, tracking), en lenguaje claro.
     @Published var warning: String?
+    /// Avance del entrenamiento del splat (nil = no se está entrenando).
+    @Published var splatProgress: Double?
+    private let splatCancel = CancelFlag()
     static let minimumKeyframes = 8
     /// Tope de fotos: más no mejora el resultado y llenaría memoria y disco (~5 MB por foto).
     static let maximumKeyframes = 400
@@ -197,6 +244,24 @@ final class SpaceScanModel: NSObject, ObservableObject, ARSessionDelegate {
             }
         }.value
     }
+
+    /// Gaussian splat fotorrealista entrenado en el iPhone con las fotos, las poses de ARKit y la malla en color.
+    func trainSplat() async throws {
+        let hasMesh = FileManager.default.fileExists(atPath: work.appending(path: "mesh.ply").path)
+        let (folder, downscale) = try SplatTrainer.prepare(dataset: work, frames: frames, hasMesh: hasMesh)
+        let output = Scans.newURL("Espacio splat", ext: "ply")
+        let cancel = splatCancel
+        splatProgress = 0
+        defer { splatProgress = nil }
+        _ = try await Task.detached(priority: .userInitiated) {
+            try SplatTrainer.train(folder: folder, downscale: downscale, output: output, isCancelled: { cancel.value }) { progress in
+                // Tras terminar (splatProgress = nil) se ignoran avisos rezagados.
+                Task { @MainActor in if self.splatProgress != nil { self.splatProgress = progress } }
+            }
+        }.value
+    }
+
+    func cancelSplat() { splatCancel.cancel() }
 
     /// Une las mallas de todos los anclajes en coordenadas del mundo.
     static func mesh(from anchors: [ARMeshAnchor]) -> (positions: [SIMD3<Float>], indices: [UInt32]) {
